@@ -154,55 +154,92 @@ async def create_instance(
     inst_workspace = Path(settings.FSEMS_WORKSPACE) / instance_id
     inst_workspace.mkdir(parents=True, exist_ok=True)
     
-    # 优先部署用户指定的自定义 RootFS 路径，若未指定则自动定位模板匹配的默认 RootFS
-    if rootfs_path and rootfs_path.strip():
-        custom_rootfs = Path(rootfs_path.strip())
-        if not custom_rootfs.exists():
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error_code": "PATH_NOT_FOUND", "message": f"指定的 RootFS 自定义路径不存在: {rootfs_path}"},
-            )
-        try:
+    # 获取模板预置的默认 .img.gz 物理归档包
+    default_rootfs_gz = Path(template.drive_path)
+    instance_drive_path = inst_workspace / "rootfs.img"
+    
+    # 1. 自动为该实例部署属于它自己的独立 QEMU 启动磁盘（从默认模板解压或者自定义路径解压）
+    try:
+        if rootfs_path and rootfs_path.strip():
+            custom_rootfs = Path(rootfs_path.strip())
+            if not custom_rootfs.exists():
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={"error_code": "PATH_NOT_FOUND", "message": f"指定的 RootFS 自定义路径不存在: {rootfs_path}"},
+                )
+            
             if custom_rootfs.is_file():
-                logger.info(f"为新实例部署用户指定的 RootFS 压缩包: {custom_rootfs} -> {inst_workspace}")
-                extract_archive(custom_rootfs, inst_workspace)
+                # 如果用户提供的是一个文件
+                logger.info(f"为新实例部署用户指定的 RootFS 文件: {custom_rootfs}")
+                suffix = custom_rootfs.suffix.lower()
+                name_lower = custom_rootfs.name.lower()
+                
+                if name_lower.endswith(".img.gz") or suffix == ".gz":
+                    # 如果是 .img.gz 格式镜像包，解压得到该实例的独立启动盘
+                    import gzip
+                    logger.info(f"解压自定义镜像包得到实例的启动磁盘: {custom_rootfs} -> {instance_drive_path}")
+                    with gzip.open(custom_rootfs, "rb") as f_in:
+                        with open(instance_drive_path, "wb") as f_out:
+                            shutil.copyfileobj(f_in, f_out)
+                    # 同时提取该磁盘镜像的文件树到工作区以供宿主机 VFS 浏览器访问
+                    logger.info(f"提取自定义磁盘文件系统到工作区: {instance_drive_path} -> {inst_workspace}")
+                    extract_archive(custom_rootfs, inst_workspace)
+                else:
+                    # 其他格式的文件包（如 .tar.gz），直接解包至工作区
+                    extract_archive(custom_rootfs, inst_workspace)
+                    # 同时，将默认模板的 .img.gz 解包作为独立系统磁盘
+                    if default_rootfs_gz.exists():
+                        import gzip
+                        with gzip.open(default_rootfs_gz, "rb") as f_in:
+                            with open(instance_drive_path, "wb") as f_out:
+                                shutil.copyfileobj(f_in, f_out)
             elif custom_rootfs.is_dir():
-                logger.info(f"为新实例部署用户指定的 RootFS 文件夹目录: {custom_rootfs} -> {inst_workspace}")
+                # 如果用户提供的是文件夹，递归复制其全部文件系统树到工作区
+                logger.info(f"拷贝自定义文件系统根文件夹到工作区: {custom_rootfs} -> {inst_workspace}")
                 shutil.copytree(custom_rootfs, inst_workspace, symlinks=True, dirs_exist_ok=True)
-        except Exception as e:
-            logger.error(f"部署自定义 RootFS 失败: {e}")
-            if inst_workspace.exists():
-                shutil.rmtree(inst_workspace, ignore_errors=True)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error_code": "ROOTFS_SETUP_FAILED", "message": f"部署自定义根文件系统失败: {str(e)}"},
-            )
-    else:
-        # 自动定位模板匹配的默认 RootFS 压缩包
-        drive_path_obj = Path(template.drive_path)
-        rootfs_archive = drive_path_obj.parent.parent / "rootfs" / f"{drive_path_obj.name}.gz"
-        
-        if not rootfs_archive.exists():
-            logger.warning(f"模板对应的 RootFS 预置压缩包不存在: {rootfs_archive}，工作空间暂不部署预置文件系统")
+                # 同时，将默认模板的 .img.gz 解压作为该实例的独立 QEMU 启动磁盘
+                if default_rootfs_gz.exists():
+                    import gzip
+                    with gzip.open(default_rootfs_gz, "rb") as f_in:
+                        with open(instance_drive_path, "wb") as f_out:
+                            shutil.copyfileobj(f_in, f_out)
         else:
-            try:
-                logger.info(f"自动为新实例解包部署模板匹配的默认 RootFS: {rootfs_archive} -> {inst_workspace}")
-                extract_archive(rootfs_archive, inst_workspace)
-            except Exception as e:
-                logger.error(f"解包默认文件系统失败: {e}")
-                if inst_workspace.exists():
-                    shutil.rmtree(inst_workspace, ignore_errors=True)
+            # 用户未指定自定义 RootFS，自动使用该模板匹配的默认 RootFS 压缩包进行解压部署
+            if not default_rootfs_gz.exists():
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail={"error_code": "ROOTFS_SETUP_FAILED", "message": f"默认文件系统部署失败: {str(e)}"},
+                    detail={"error_code": "DEFAULT_ROOTFS_MISSING", "message": f"模板预设磁盘文件系统不存在: {default_rootfs_gz}"},
                 )
+            # a. 解压 .img.gz 为该实例独立的系统盘镜像 rootfs.img
+            import gzip
+            logger.info(f"自动解压预置镜像包到实例工作区作为独立系统磁盘: {default_rootfs_gz} -> {instance_drive_path}")
+            with gzip.open(default_rootfs_gz, "rb") as f_in:
+                with open(instance_drive_path, "wb") as f_out:
+                    shutil.copyfileobj(f_in, f_out)
+            # b. 使用 debugfs 将该系统盘的文件树递归释放到工作区
+            logger.info(f"自动提取实例独立磁盘的文件树到工作区: {instance_drive_path} -> {inst_workspace}")
+            extract_archive(default_rootfs_gz, inst_workspace)
+            
+    except Exception as e:
+        logger.error(f"部署实例专属文件系统失败: {e}")
+        if inst_workspace.exists():
+            shutil.rmtree(inst_workspace, ignore_errors=True)
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error_code": "ROOTFS_SETUP_FAILED", "message": f"部署专属文件系统失败: {str(e)}"},
+        )
+
+    # 实例专属 QEMU 磁盘镜像路径
+    drive_path = str(instance_drive_path.resolve()) if instance_drive_path.exists() else None
 
     instance = Instance(
         id=instance_id,
         name=name,
         template_id=template_id,
         status="STOPPED",
-        drive_path=None,  # 启动时自动安全回退到 template.drive_path
+        drive_path=drive_path,  # 启动时使用该实例专属的 rootfs.img 磁盘块设备
         guest_ssh_host=template.guest_ssh_host,
     )
     session.add(instance)
