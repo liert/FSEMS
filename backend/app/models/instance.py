@@ -18,6 +18,8 @@ class Instance(Base):
     drive_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     tap_name: Mapped[str | None] = mapped_column(String(32), nullable=True)
     guest_ssh_host: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    network_type: Mapped[str | None] = mapped_column(String(20), default="same", server_default="same")
+    bridge_name: Mapped[str | None] = mapped_column(String(50), nullable=True)
     pid: Mapped[int | None] = mapped_column(Integer, nullable=True)
     serial_socket: Mapped[str | None] = mapped_column(String(255), nullable=True)
     error_msg: Mapped[str | None] = mapped_column(Text, nullable=True)

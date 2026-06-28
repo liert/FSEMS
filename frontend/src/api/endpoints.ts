@@ -26,13 +26,15 @@ export function fetchInstanceDetail(id: string) {
 export function createInstance(
   name: string,
   templateId: number,
-  rootfsPath?: string
+  rootfsPath?: string,
+  networkType?: "same" | "different"
 ) {
   return unwrap(
     request.post<ApiResponse<{ id: string; status: string }>>("/instances", {
       name,
       template_id: templateId,
       rootfs_path: rootfsPath || null,
+      network_type: networkType || "same",
     })
   );
 }

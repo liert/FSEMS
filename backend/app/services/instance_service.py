@@ -30,6 +30,8 @@ def instance_to_out(instance: Instance) -> dict:
         "tap_name": instance.tap_name,
         "guest_ssh_host": instance.guest_ssh_host or (template.guest_ssh_host if template else None),
         "guest_ssh_port": template.guest_ssh_port if template else 22,
+        "network_type": instance.network_type,
+        "bridge_name": instance.bridge_name,
         "pid": instance.pid,
         "created_at": instance.created_at,
     }
@@ -175,11 +177,52 @@ def extract_archive(archive_path: Path, dest_dir: Path) -> None:
             raise ValueError(f"无法确定该文件系统的具体类型，不支持的格式: {archive_path.name}")
 
 
+def configure_instance_network(img_path: Path, guest_ip: str, gateway_ip: str) -> None:
+    """
+    使用 debugfs -w 在用户空间免挂载写入自定义 /etc/config/network 文件以配置 IP 与网关。
+    """
+    import tempfile
+    import subprocess
+    
+    # 构造 OpenWrt 标准的 lan 配置段
+    config_content = f"""config interface 'loopback'
+\toption device 'lo'
+\toption proto 'static'
+\toption ipaddr '127.0.0.1'
+\toption netmask '255.0.0.0'
+
+config globals 'globals'
+\toption ula_prefix 'fd00::/48'
+
+config interface 'lan'
+\toption device 'eth0'
+\toption proto 'static'
+\toption ipaddr '{guest_ip}'
+\toption netmask '255.255.255.0'
+\toption gateway '{gateway_ip}'
+\toption dns '8.8.8.8'
+"""
+    
+    with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
+        f.write(config_content)
+        temp_path = f.name
+        
+    try:
+        cmd = ["debugfs", "-w", "-R", f"write {temp_path} /etc/config/network", str(img_path)]
+        subprocess.run(cmd, capture_output=True, text=True, check=True)
+        logger.info(f"成功将网络配置写入磁盘镜像 {img_path}: IP={guest_ip}, GW={gateway_ip}")
+    except Exception as e:
+        logger.error(f"通过 debugfs 写入网络配置失败: {e}")
+    finally:
+        Path(temp_path).unlink(missing_ok=True)
+
+
 async def create_instance(
     session: AsyncSession,
     name: str,
     template_id: int,
     rootfs_path: str | None = None,
+    network_type: str | None = "same",
 ) -> Instance:
     template = await session.get(Template, template_id)
     if not template:
@@ -209,8 +252,54 @@ async def create_instance(
         with gzip.open(default_rootfs_gz, "rb") as f_in:
             with open(instance_drive_path, "wb") as f_out:
                 shutil.copyfileobj(f_in, f_out)
+        
+        # 2. 分配唯一的 IP 地址与网桥名
+        # 查询所有已存在的实例，以计算新实例的网络属性
+        result = await session.execute(select(Instance))
+        existing_instances = list(result.scalars().all())
+        
+        net_type = network_type or "same"
+        bridge_name = settings.FSEMS_BRIDGE
+        
+        if net_type == "same":
+            # 同一局域网：使用默认网桥，分配同一网段（192.168.1.0/24）下的顺序唯一 IP
+            # 排除已被占用的 IP，从 192.168.1.1 开始，跳过 192.168.1.254 (host IP)
+            used_ips = {inst.guest_ssh_host for inst in existing_instances if inst.guest_ssh_host}
+            allocated_ip = None
+            for i in range(1, 250):
+                ip = f"192.168.1.{i}"
+                if ip not in used_ips:
+                    allocated_ip = ip
+                    break
+            if not allocated_ip:
+                allocated_ip = "192.168.1.100" # fallback
+            guest_ssh_host = allocated_ip
+            gateway_ip = "192.168.1.254"
+        else:
+            # 不同局域网：分配不同的局域网网段 (192.168.X.0/24) 和独立的网桥 (br_fs_X)
+            # 我们根据已用网桥序号 X 的最大值来自动递增
+            used_idxs = set()
+            for inst in existing_instances:
+                if inst.bridge_name and inst.bridge_name.startswith("br_fs_"):
+                    try:
+                        idx = int(inst.bridge_name.split("_")[-1])
+                        used_idxs.add(idx)
+                    except ValueError:
+                        pass
+            
+            # 寻找最小可用序号
+            new_idx = 10  # 从 10 开始，避免和物理网络或者宿主机常用网卡序号冲突
+            while new_idx in used_idxs:
+                new_idx += 1
                 
-        # 2. 用户指定了自定义 rootfs 路径参数（用以快速复制模拟环境，不作为 qemu 启动参数，解包到 workspace/{instance_id}/rootfs 目录下）
+            bridge_name = f"br_fs_{new_idx}"
+            guest_ssh_host = f"192.168.{new_idx}.1"
+            gateway_ip = f"192.168.{new_idx}.254"
+
+        # 3. 自动将新生成的自定义网络 IP 写入虚拟机系统的启动盘 /etc/config/network 中
+        configure_instance_network(instance_drive_path, guest_ssh_host, gateway_ip)
+                
+        # 4. 用户指定了自定义 rootfs 路径参数（用以快速复制模拟环境，不作为 qemu 启动参数，解包到 workspace/{instance_id}/rootfs 目录下）
         if rootfs_path and rootfs_path.strip():
             custom_rootfs = Path(rootfs_path.strip())
             if not custom_rootfs.exists():
@@ -229,6 +318,31 @@ async def create_instance(
             elif custom_rootfs.is_dir():
                 logger.info(f"拷贝自定义 RootFS 文件夹到辅助目录: {custom_rootfs} -> {inst_rootfs_dir}")
                 shutil.copytree(custom_rootfs, inst_rootfs_dir, symlinks=True, dirs_exist_ok=True)
+            
+            # 同时也把网络配置写入宿主机解包出的文件目录中，使其内容与 VM 实机保持一致
+            host_net_config = inst_rootfs_dir / "etc" / "config" / "network"
+            try:
+                host_net_config.parent.mkdir(parents=True, exist_ok=True)
+                config_content = f"""config interface 'loopback'
+\toption device 'lo'
+\toption proto 'static'
+\toption ipaddr '127.0.0.1'
+\toption netmask '255.0.0.0'
+
+config globals 'globals'
+\toption ula_prefix 'fd00::/48'
+
+config interface 'lan'
+\toption device 'eth0'
+\toption proto 'static'
+\toption ipaddr '{guest_ssh_host}'
+\toption netmask '255.255.255.0'
+\toption gateway '{gateway_ip}'
+\toption dns '8.8.8.8'
+"""
+                host_net_config.write_text(config_content)
+            except Exception as e:
+                logger.warning(f"写入宿主机备份网络配置文件失败: {e}")
                 
     except Exception as e:
         logger.error(f"部署实例专属文件系统失败: {e}")
@@ -250,7 +364,9 @@ async def create_instance(
         template_id=template_id,
         status="STOPPED",
         drive_path=drive_path,  # 启动时使用该实例专属的 rootfs.img 磁盘块设备
-        guest_ssh_host=template.guest_ssh_host,
+        guest_ssh_host=guest_ssh_host,
+        network_type=net_type,
+        bridge_name=bridge_name,
     )
     session.add(instance)
     await session.commit()
@@ -293,10 +409,23 @@ async def perform_action(session: AsyncSession, instance: Instance, action: str)
                 status_code=status.HTTP_409_CONFLICT,
                 detail={"error_code": "INSTANCE_STATE_CONFLICT", "message": "Already running"},
             )
-        if not await bridge_exists(settings.FSEMS_BRIDGE):
+        bridge = instance.bridge_name or settings.FSEMS_BRIDGE
+        host_ip = None
+        if bridge == settings.FSEMS_BRIDGE:
+            host_ip = "192.168.1.254"
+        else:
+            parts = (instance.guest_ssh_host or "").split(".")
+            if len(parts) == 4:
+                host_ip = f"{parts[0]}.{parts[1]}.{parts[2]}.254"
+                
+        from app.services.network_setup import ensure_bridge_setup
+        try:
+            await ensure_bridge_setup(bridge, host_ip)
+        except Exception as e:
+            logger.error(f"初始化实例网桥 {bridge} 失败: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error_code": "TAP_SETUP_FAILED", "message": f"Bridge {settings.FSEMS_BRIDGE} missing"},
+                detail={"error_code": "TAP_SETUP_FAILED", "message": f"Bridge {bridge} setup failed: {str(e)}"},
             )
         kernel = Path(template.kernel_path)
         drive = Path(instance.drive_path or template.drive_path)

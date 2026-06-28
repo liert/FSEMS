@@ -7,6 +7,7 @@ class InstanceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     template_id: int
     rootfs_path: str | None = None
+    network_type: str | None = "same"  # "same" (同一局域网) 或 "different" (不同局域网)
 
 
 class InstanceAction(BaseModel):
@@ -23,6 +24,8 @@ class InstanceOut(BaseModel):
     tap_name: str | None = None
     guest_ssh_host: str | None = None
     guest_ssh_port: int = 22
+    network_type: str | None = None
+    bridge_name: str | None = None
     pid: int | None = None
     created_at: datetime
 

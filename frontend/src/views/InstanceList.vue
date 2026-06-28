@@ -51,6 +51,15 @@
         <el-form-item label="自定义RootFS (可选)">
           <el-input v-model="newRootfsPath" placeholder="可选输入宿主机上的压缩包或文件夹路径作为自定义系统" />
         </el-form-item>
+        <el-form-item label="网络模式">
+          <el-radio-group v-model="newNetworkType">
+            <el-radio label="same">同一局域网</el-radio>
+            <el-radio label="different">独立局域网</el-radio>
+          </el-radio-group>
+          <div style="font-size: 12px; color: #909399; margin-top: 4px; line-height: 1.4;">
+            同一局域网实例共享网桥分配不同 IP (192.168.1.X)；独立局域网实例将独占专属隔离网桥与独立网段 (192.168.X.1)。
+          </div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="cancelCreate">取消</el-button>
@@ -86,6 +95,7 @@ const creating = ref(false);
 
 // 本地自定义 RootFS 文件或目录物理路径
 const newRootfsPath = ref("");
+const newNetworkType = ref<"same" | "different">("same");
 
 function statusType(status: string) {
   if (status === "RUNNING") return "success";
@@ -164,7 +174,8 @@ async function create() {
     await createInstance(
       newName.value,
       newTemplateId.value,
-      newRootfsPath.value.trim()
+      newRootfsPath.value.trim(),
+      newNetworkType.value
     );
     showCreate.value = false;
     resetForm();
@@ -185,6 +196,7 @@ function cancelCreate() {
 function resetForm() {
   newName.value = "";
   newRootfsPath.value = "";
+  newNetworkType.value = "same";
 }
 
 function logout() {

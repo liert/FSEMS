@@ -65,8 +65,17 @@ SEED_TEMPLATES = [
 
 
 async def init_db() -> None:
+    from sqlalchemy import text
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        try:
+            await conn.execute(text("ALTER TABLE instances ADD COLUMN network_type VARCHAR(20) DEFAULT 'same'"))
+        except Exception:
+            pass
+        try:
+            await conn.execute(text("ALTER TABLE instances ADD COLUMN bridge_name VARCHAR(50) DEFAULT 'br_fsems'"))
+        except Exception:
+            pass
 
     async with SessionLocal() as session:
         # 清除旧模版数据，确保版本/架构模板更新生效

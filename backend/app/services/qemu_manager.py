@@ -82,7 +82,8 @@ async def setup_tap(instance: Instance) -> str:
 
     settings = get_settings()
     tap = tap_name_for(instance.id)
-    await add_tap_to_bridge(tap, settings.FSEMS_BRIDGE, settings.fsems_user)
+    bridge = instance.bridge_name or settings.FSEMS_BRIDGE
+    await add_tap_to_bridge(tap, bridge, settings.fsems_user)
     return tap
 
 
@@ -161,6 +162,6 @@ async def stop_process(pid: int | None) -> None:
 
 async def cleanup_instance_resources(instance: Instance) -> None:
     await stop_process(instance.pid)
-    await teardown_tap(instance.tap_name)
+    await teardown_tap(instance.tap_name, instance.bridge_name)
     if instance.serial_socket and Path(instance.serial_socket).exists():
         Path(instance.serial_socket).unlink(missing_ok=True)
