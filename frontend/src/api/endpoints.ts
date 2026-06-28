@@ -45,6 +45,12 @@ export function instanceAction(id: string, action: "start" | "stop" | "reset") {
   );
 }
 
+export function deleteInstance(id: string) {
+  return unwrap(
+    request.delete<ApiResponse<void>>(`/instances/${id}`)
+  );
+}
+
 export function consoleWsUrl(id: string): string {
   const token = localStorage.getItem("fsems_token") || "";
   const proto = window.location.protocol === "https:" ? "wss" : "ws";

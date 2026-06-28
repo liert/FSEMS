@@ -369,3 +369,25 @@ async def perform_action(session: AsyncSession, instance: Instance, action: str)
         return await perform_action(session, instance, "start")
 
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid action")
+
+
+async def delete_instance(session: AsyncSession, instance_id: str) -> None:
+    instance = await get_instance(session, instance_id)
+    
+    # 1. 如果实例在运行中，先停止并清理网卡资源
+    if instance.status in RUNNING_STATUSES:
+        try:
+            await qemu_manager.cleanup_instance_resources(instance)
+        except Exception as e:
+            logger.warning(f"删除实例时停止虚机失败: {e}")
+            
+    # 2. 递归删除宿主机工作空间下的专属文件夹及镜像 rootfs.img
+    settings = get_settings()
+    inst_workspace = Path(settings.FSEMS_WORKSPACE) / instance_id
+    if inst_workspace.exists() and inst_workspace.is_dir():
+        logger.info(f"删除实例工作空间目录: {inst_workspace}")
+        shutil.rmtree(inst_workspace, ignore_errors=True)
+        
+    # 3. 彻底删除数据库数据
+    await session.delete(instance)
+    await session.commit()

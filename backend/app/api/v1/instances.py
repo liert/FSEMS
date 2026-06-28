@@ -81,6 +81,16 @@ async def get_instance_detail(
     )
 
 
+@router.delete("/{instance_id}", response_model=ApiResponse[dict])
+async def delete_instance(
+    instance_id: str,
+    _user: str = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[dict]:
+    await instance_service.delete_instance(session, instance_id)
+    return ApiResponse(data={}, message="Instance deleted successfully")
+
+
 @router.websocket("/{instance_id}/console")
 async def console_ws(websocket: WebSocket, instance_id: str, token: str | None = None) -> None:
     await websocket.accept()

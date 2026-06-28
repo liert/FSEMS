@@ -18,7 +18,7 @@
         </template>
       </el-table-column>
       <el-table-column prop="guest_ssh_host" label="SSH 地址" width="140" />
-      <el-table-column label="操作" width="300">
+      <el-table-column label="操作" width="360">
         <template #default="{ row }">
           <el-button size="small" :disabled="row.status === 'RUNNING' || row.status === 'STARTING' || row.status === 'STOPPING'" @click="doAction(row.id, 'start')">
             启动
@@ -29,6 +29,9 @@
           <el-button size="small" @click="doAction(row.id, 'reset')">重置</el-button>
           <el-button size="small" type="primary" @click="manageInstance(row.id)">
             管理
+          </el-button>
+          <el-button size="small" type="danger" :disabled="row.status === 'RUNNING' || row.status === 'STARTING' || row.status === 'STOPPING'" @click="deleteInst(row.id)">
+            删除
           </el-button>
         </template>
       </el-table-column>
@@ -60,12 +63,13 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import {
   createInstance,
   fetchInstances,
   fetchTemplates,
   instanceAction,
+  deleteInstance,
 } from "@/api/endpoints";
 import type { Instance, Template } from "@/api/types";
 import { useAuthStore } from "@/stores/auth";
@@ -125,6 +129,27 @@ async function doAction(id: string, action: "start" | "stop" | "reset") {
     await load();
   } catch (e: unknown) {
     ElMessage.error(e instanceof Error ? e.message : "操作失败");
+  }
+}
+
+async function deleteInst(id: string) {
+  try {
+    await ElMessageBox.confirm(
+      "确定要彻底删除该实例吗？这将同步清理虚拟机专属磁盘镜像及全部解压的工作空间数据！",
+      "安全警告",
+      {
+        confirmButtonText: "确定删除",
+        cancelButtonText: "取消",
+        type: "warning",
+      }
+    );
+    await deleteInstance(id);
+    ElMessage.success("实例删除成功");
+    await load();
+  } catch (e: unknown) {
+    if (e !== "cancel") {
+      ElMessage.error(e instanceof Error ? e.message : "删除失败");
+    }
   }
 }
 
