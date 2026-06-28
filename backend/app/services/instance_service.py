@@ -259,19 +259,6 @@ async def create_instance(
 
 
 
-async def _ensure_single_running(session: AsyncSession, exclude_id: str | None = None) -> None:
-    query = select(Instance).where(Instance.status.in_(("RUNNING", "STARTING")))
-    if exclude_id:
-        query = query.where(Instance.id != exclude_id)
-    result = await session.execute(query)
-    if result.scalars().first():
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "error_code": "INSTANCE_STATE_CONFLICT",
-                "message": "Phase 1 allows only one running instance",
-            },
-        )
 
 
 async def _boot_watch(session_factory, instance_id: str) -> None:
@@ -306,7 +293,6 @@ async def perform_action(session: AsyncSession, instance: Instance, action: str)
                 status_code=status.HTTP_409_CONFLICT,
                 detail={"error_code": "INSTANCE_STATE_CONFLICT", "message": "Already running"},
             )
-        await _ensure_single_running(session, exclude_id=instance.id)
         if not await bridge_exists(settings.FSEMS_BRIDGE):
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
