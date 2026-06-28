@@ -113,20 +113,22 @@ def extract_archive(archive_path: Path, dest_dir: Path) -> None:
     if "squashfs" in file_info or archive_path.name.lower().endswith(".squashfs") or archive_path.name.lower().endswith(".squash"):
         logger.info(f"检测到 SquashFS 文件系统。正在运行 unsquashfs 提取...")
         cmd = ["unsquashfs", "-d", str(dest_dir), "-f", str(archive_path)]
-        try:
-            subprocess.run(cmd, capture_output=True, text=True, check=True)
-        except subprocess.CalledProcessError as e:
-            logger.error(f"unsquashfs 提取失败: {e.stderr}")
-            raise RuntimeError(f"unsquashfs 提取失败: {e.stderr}")
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        logger.info(f"unsquashfs 执行完成，返回码: {proc.returncode}")
+        # 仅在返回码为 1 (FATAL 错误) 或目标目录为空（完全没能提取出任何文件）时抛出异常
+        if proc.returncode == 1 or not any(dest_dir.iterdir()):
+            logger.error(f"unsquashfs 提取失败: {proc.stderr}")
+            raise RuntimeError(f"unsquashfs 提取失败: {proc.stderr or proc.stdout}")
             
     elif "ext" in file_info and "filesystem" in file_info:
         logger.info(f"检测到 ext2/3/4 文件系统。正在运行 debugfs rdump 提取...")
         cmd = ["debugfs", "-R", f"rdump / {dest_dir}", str(archive_path)]
-        try:
-            subprocess.run(cmd, capture_output=True, text=True, check=True)
-        except subprocess.CalledProcessError as e:
-            logger.error(f"debugfs rdump 提取失败: {e.stderr}")
-            raise RuntimeError(f"debugfs rdump 提取失败: {e.stderr}")
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        logger.info(f"debugfs 执行完成，返回码: {proc.returncode}")
+        # 如果提取完成后，目标文件夹依然为空，说明 debugfs 提取彻底失败
+        if not any(dest_dir.iterdir()):
+            logger.error(f"debugfs rdump 提取失败: {proc.stderr}")
+            raise RuntimeError(f"debugfs rdump 提取失败: {proc.stderr or proc.stdout}")
             
     elif "gzip compressed" in file_info or archive_path.suffix.lower() == ".gz":
         logger.info(f"检测到 Gzip 压缩包。正在解压...")
