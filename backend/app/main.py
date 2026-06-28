@@ -72,7 +72,9 @@ async def lifespan(_app: FastAPI):
     celery_proc = None
     if redis_ready:
         try:
-            cmd = ["celery", "-A", "app.core.celery_app", "worker", "--loglevel=warning"]
+            import sys
+            celery_bin = str(Path(sys.executable).parent / "celery")
+            cmd = [celery_bin, "-A", "app.core.celery_app", "worker", "--loglevel=warning"]
             if not Path("app/core/celery_app.py").exists() and Path("backend/app/core/celery_app.py").exists():
                 cmd += ["--workdir", "backend"]
             
@@ -135,3 +137,4 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+# Trigger reload: Redis started
