@@ -177,6 +177,40 @@ def extract_archive(archive_path: Path, dest_dir: Path) -> None:
             raise ValueError(f"无法确定该文件系统的具体类型，不支持的格式: {archive_path.name}")
 
 
+def fix_absolute_symlinks(rootfs_dir: Path) -> None:
+    """
+    递归扫描解压出来的 rootfs 目录，将所有绝对路径软链接（符号链接）转换为相对路径软链接，
+    防止在宿主机上由于直接解析至宿主机根目录 / 导致链接失效或越权错误，同时保持在虚拟机内部的正确性。
+    """
+    rootfs_dir = rootfs_dir.resolve()
+    logger.info(f"开始扫描并自动修复自定义 RootFS 中的绝对路径软链接: {rootfs_dir}")
+    import os
+    fixed_count = 0
+    
+    # 采用 os.walk 快速递归（不跟随软链接以防无限循环）
+    for root, dirs, files in os.walk(rootfs_dir, followlinks=False):
+        for name in files + dirs:
+            path = Path(root) / name
+            if path.is_symlink():
+                try:
+                    target = os.readlink(path)
+                    # 匹配指向以 / 开头的绝对符号链接
+                    if target.startswith("/"):
+                        # 计算目标在当前 rootfs 中的绝对位置
+                        target_abs_path = rootfs_dir / target.lstrip("/")
+                        # 计算相对于软链接所在父目录的相对路径
+                        relative_target = os.path.relpath(target_abs_path, path.parent)
+                        
+                        # 断开原链接，重新创建为相对符号链接
+                        path.unlink()
+                        path.symlink_to(relative_target)
+                        fixed_count += 1
+                except Exception as e:
+                    logger.warning(f"修复符号链接失败 {path} -> {target}: {e}")
+                    
+    logger.info(f"绝对符号链接修复完毕，成功处理了 {fixed_count} 个链接文件")
+
+
 def configure_instance_network(img_path: Path, guest_ip: str, gateway_ip: str) -> None:
     """
     使用 debugfs -w 在用户空间免挂载写入自定义 /etc/config/network 文件以配置 IP 与网关。
@@ -318,6 +352,12 @@ async def create_instance(
             elif custom_rootfs.is_dir():
                 logger.info(f"拷贝自定义 RootFS 文件夹到辅助目录: {custom_rootfs} -> {inst_rootfs_dir}")
                 shutil.copytree(custom_rootfs, inst_rootfs_dir, symlinks=True, dirs_exist_ok=True)
+
+            # 自动扫描并修复其中的绝对路径软链接为相对路径软链接，防止在宿主机解析失效或越权崩溃
+            try:
+                fix_absolute_symlinks(inst_rootfs_dir)
+            except Exception as e:
+                logger.warning(f"自动修复自定义 RootFS 中的绝对路径符号链接失败: {e}")
                 
     except Exception as e:
         logger.error(f"部署实例专属文件系统失败: {e}")
