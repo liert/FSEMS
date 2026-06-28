@@ -195,57 +195,48 @@
       </div>
     </div>
 
-    <!-- 传输进度对话框 -->
-    <el-dialog
-      v-model="showProgressDialog"
-      title="文件传输进度"
-      width="420px"
-      :close-on-click-modal="false"
-      :close-on-press-escape="false"
-      :show-close="taskStatus !== 'RUNNING' && taskStatus !== 'PENDING'"
-      class="custom-progress-dialog glass-dialog"
-    >
-      <div class="progress-details">
-        <div class="progress-message">
-          <p><strong>源路径:</strong> {{ currentTaskDetails.src }}</p>
-          <p><strong>目的路径:</strong> {{ currentTaskDetails.dest }}</p>
+    <!-- 右下角悬浮传输进度条 -->
+    <Transition name="slide-fade">
+      <div v-if="showProgressWidget" class="transfer-progress-widget">
+        <div class="widget-header">
+          <div class="header-title-container">
+            <el-icon class="is-loading spin-icon" v-if="taskStatus === 'RUNNING' || taskStatus === 'PENDING'">
+              <Loading />
+            </el-icon>
+            <el-icon v-else-if="taskStatus === 'SUCCESS'" class="status-icon success-icon">
+              <CircleCheck />
+            </el-icon>
+            <el-icon v-else-if="taskStatus === 'FAILURE'" class="status-icon danger-icon">
+              <CircleClose />
+            </el-icon>
+            <span class="widget-title">文件传输进度 ({{ taskStatus }})</span>
+          </div>
+          <el-icon class="close-btn" @click="showProgressWidget = false"><CircleClose /></el-icon>
         </div>
-
-        <div class="progress-bar-container">
-          <el-progress
-            :percentage="taskProgress"
-            :status="progressUiStatus"
-            :stroke-width="12"
-            striped
-            striped-flow
-          />
-        </div>
-
-        <div class="task-status-text">
-          状态: 
-          <el-tag :type="statusTagType">{{ taskStatus }}</el-tag>
-        </div>
-
-        <div v-if="taskErrorMsg" class="error-alert">
-          <el-alert
-            title="传输失败"
-            type="error"
-            :description="taskErrorMsg"
-            show-icon
-            :closable="false"
-          />
+        <div class="widget-body">
+          <div class="path-row">
+            <span class="path-label">源:</span>
+            <span class="path-value" :title="currentTaskDetails.src">{{ currentTaskDetails.src }}</span>
+          </div>
+          <div class="path-row">
+            <span class="path-label">目:</span>
+            <span class="path-value" :title="currentTaskDetails.dest">{{ currentTaskDetails.dest }}</span>
+          </div>
+          <div class="progress-row">
+            <el-progress
+              :percentage="taskProgress"
+              :status="progressUiStatus"
+              :stroke-width="8"
+              striped
+              striped-flow
+            />
+          </div>
+          <div v-if="taskErrorMsg" class="error-row">
+            <span class="error-text">{{ taskErrorMsg }}</span>
+          </div>
         </div>
       </div>
-      <template #footer>
-        <el-button
-          type="primary"
-          :disabled="taskStatus === 'RUNNING' || taskStatus === 'PENDING'"
-          @click="showProgressDialog = false"
-        >
-          确定
-        </el-button>
-      </template>
-    </el-dialog>
+    </Transition>
 
     <!-- 网页右键快捷上下文菜单 -->
     <div
@@ -270,6 +261,9 @@ import {
   Document,
   DocumentCopy,
   Upload,
+  Loading,
+  CircleCheck,
+  CircleClose,
 } from "@element-plus/icons-vue";
 import {
   fetchHostFiles,
@@ -469,7 +463,7 @@ function closeContextMenu() {
 }
 
 // 传输进度控制
-const showProgressDialog = ref(false);
+const showProgressWidget = ref(false);
 const taskProgress = ref(0);
 const taskStatus = ref("PENDING");
 const taskErrorMsg = ref<string | null>(null);
@@ -691,7 +685,7 @@ async function initiateTransfer(direction: "host_to_guest" | "guest_to_host", fi
   taskStatus.value = "PENDING";
   taskProgress.value = 0;
   taskErrorMsg.value = null;
-  showProgressDialog.value = true;
+  showProgressWidget.value = true;
 
   try {
     const taskData = await transferFile(props.instanceId, direction, src, dest);
@@ -699,12 +693,16 @@ async function initiateTransfer(direction: "host_to_guest" | "guest_to_host", fi
   } catch (error: any) {
     taskStatus.value = "FAILURE";
     taskErrorMsg.value = error.message || error;
+    setTimeout(() => {
+      showProgressWidget.value = false;
+    }, 6000);
   }
 }
 
 // 轮询任务进度
 function pollTaskStatus(taskId: string) {
-  const timer = setInterval(async () => {
+  let timer: any = null;
+  const checkStatus = async () => {
     try {
       const data = await fetchTaskStatus(taskId);
       taskStatus.value = data.status;
@@ -712,20 +710,32 @@ function pollTaskStatus(taskId: string) {
       taskErrorMsg.value = data.error_msg;
 
       if (data.status === "SUCCESS") {
-        clearInterval(timer);
+        if (timer) clearInterval(timer);
         ElMessage.success("传输成功！");
         loadHostFiles();
         loadGuestFiles();
+        setTimeout(() => {
+          showProgressWidget.value = false;
+        }, 2500);
       } else if (data.status === "FAILURE") {
-        clearInterval(timer);
+        if (timer) clearInterval(timer);
         ElMessage.error(`传输失败: ${data.error_msg}`);
+        setTimeout(() => {
+          showProgressWidget.value = false;
+        }, 6000);
       }
     } catch (error: any) {
-      clearInterval(timer);
+      if (timer) clearInterval(timer);
       taskStatus.value = "FAILURE";
       taskErrorMsg.value = error.message || error;
+      setTimeout(() => {
+        showProgressWidget.value = false;
+      }, 6000);
     }
-  }, 1500);
+  };
+
+  checkStatus();
+  timer = setInterval(checkStatus, 800);
 }
 
 // 监听实例 ID 变更，重新加载文件列表
@@ -1104,5 +1114,135 @@ onBeforeUnmount(() => {
   background-color: #64748b !important;
   box-shadow: none !important;
   animation: none !important;
+}
+
+/* 右下角悬浮传输进度条样式 */
+.transfer-progress-widget {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  width: 340px;
+  background: rgba(15, 23, 42, 0.95);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(12px);
+  z-index: 2100;
+  color: #f1f5f9;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+.widget-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-bottom: 8px;
+}
+
+.header-title-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.spin-icon {
+  font-size: 1.1rem;
+  color: #38bdf8;
+}
+
+.status-icon {
+  font-size: 1.1rem;
+}
+
+.success-icon {
+  color: #10b981;
+}
+
+.danger-icon {
+  color: #ef4444;
+}
+
+.widget-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #f8fafc;
+}
+
+.close-btn {
+  font-size: 1.1rem;
+  color: #94a3b8;
+  cursor: pointer;
+  transition: color 0.2s ease;
+}
+
+.close-btn:hover {
+  color: #ef4444;
+}
+
+.widget-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.path-row {
+  display: flex;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  align-items: flex-start;
+}
+
+.path-label {
+  color: #94a3b8;
+  width: 24px;
+  font-weight: 600;
+}
+
+.path-value {
+  color: #cbd5e1;
+  word-break: break-all;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.progress-row {
+  margin-top: 8px;
+}
+
+.error-row {
+  margin-top: 4px;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.error-text {
+  font-size: 0.75rem;
+  color: #fca5a5;
+  word-break: break-all;
+  display: block;
+}
+
+/* 进场和出场动画 */
+.slide-fade-enter-active,
+.slide-fade-leave-active {
+  transition: all 0.3s ease-out;
+}
+
+.slide-fade-enter-from {
+  transform: translateX(100px);
+  opacity: 0;
+}
+
+.slide-fade-leave-to {
+  transform: translateY(20px);
+  opacity: 0;
 }
 </style>

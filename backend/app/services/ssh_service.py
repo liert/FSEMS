@@ -19,13 +19,16 @@ async def get_ssh_connection(host: str, port: int) -> asyncssh.SSHClientConnecti
 
     logger.info(f"正在建立 SSH 连接: {username}@{host}:{port}")
     
-    # 允许 asyncssh 自主协商以兼容各种新旧版本 Dropbear (现代 OpenWrt 固件需要现代加密算法)
+    # 允许 asyncssh 自主协商以兼容各种新旧版本 Dropbear (同时禁用 GSSAPI 验证、Agent 及本地私钥扫描，消除握手延迟)
     return await asyncssh.connect(
         host,
         port=port,
         username=username,
         password=password,
-        known_hosts=None
+        known_hosts=None,
+        gssapi_auth=False,
+        agent_path=None,
+        client_keys=None
     )
 
 # 匹配 ls -la 或 ls -lad 输出的正则表达式
