@@ -318,31 +318,6 @@ async def create_instance(
             elif custom_rootfs.is_dir():
                 logger.info(f"拷贝自定义 RootFS 文件夹到辅助目录: {custom_rootfs} -> {inst_rootfs_dir}")
                 shutil.copytree(custom_rootfs, inst_rootfs_dir, symlinks=True, dirs_exist_ok=True)
-            
-            # 同时也把网络配置写入宿主机解包出的文件目录中，使其内容与 VM 实机保持一致
-            host_net_config = inst_rootfs_dir / "etc" / "config" / "network"
-            try:
-                host_net_config.parent.mkdir(parents=True, exist_ok=True)
-                config_content = f"""config interface 'loopback'
-\toption device 'lo'
-\toption proto 'static'
-\toption ipaddr '127.0.0.1'
-\toption netmask '255.0.0.0'
-
-config globals 'globals'
-\toption ula_prefix 'fd00::/48'
-
-config interface 'lan'
-\toption device 'eth0'
-\toption proto 'static'
-\toption ipaddr '{guest_ssh_host}'
-\toption netmask '255.255.255.0'
-\toption gateway '{gateway_ip}'
-\toption dns '8.8.8.8'
-"""
-                host_net_config.write_text(config_content)
-            except Exception as e:
-                logger.warning(f"写入宿主机备份网络配置文件失败: {e}")
                 
     except Exception as e:
         logger.error(f"部署实例专属文件系统失败: {e}")
