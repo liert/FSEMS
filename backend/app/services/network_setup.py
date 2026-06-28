@@ -5,22 +5,26 @@ import subprocess
 
 logger = logging.getLogger(__name__)
 
-async def run_sudo_cmd(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+async def run_privileged_cmd(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
     """
-    以 sudo -S 形式执行特权命令，并通过标准输入传入密码 'kali'。
+    执行特权系统命令（例如网桥与网卡创建）。
+    若当前用户是 root 则直接执行；否则加上 sudo -n（非交互模式）执行。
     """
-    cmd = ["sudo", "-S"] + args
+    import os
+    is_root = os.getuid() == 0 if hasattr(os, "getuid") else False
+    
+    cmd = args
+    if not is_root:
+        cmd = ["sudo", "-n"] + args
+        
     logger.info("执行特权命令: %s", " ".join(cmd))
     
     proc = await asyncio.create_subprocess_exec(
         *cmd,
-        stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    
-    # 传入 sudo 密码
-    stdout, stderr = await proc.communicate(input=b"kali\n")
+    stdout, stderr = await proc.communicate()
     
     result = subprocess.CompletedProcess(
         args=cmd,
@@ -30,9 +34,12 @@ async def run_sudo_cmd(args: list[str], *, check: bool = True) -> subprocess.Com
     )
     
     if check and result.returncode != 0:
-        err_clean = result.stderr.replace("[sudo] password for kali: ", "").strip()
+        err_clean = result.stderr.strip()
         logger.error("特权命令失败: %s. 错误信息: %s", " ".join(cmd), err_clean)
-        raise RuntimeError(err_clean or f"Command failed: {' '.join(cmd)}")
+        raise RuntimeError(
+            f"特权命令执行失败: {err_clean or 'Permission Denied'}\n"
+            f"👉 请确保后端服务是以 sudo / root 启动的（如: sudo ../backend/.venv/bin/uvicorn app.main:app --reload）"
+        )
         
     return result
 
@@ -40,16 +47,16 @@ async def add_tap_to_bridge(tap: str, bridge: str, user: str) -> None:
     """
     创建指定用户的 TAP 网卡设备并加入网桥 (需要 root 特权)。
     """
-    await run_sudo_cmd(["ip", "tuntap", "add", "dev", tap, "mode", "tap", "user", user], check=False)
-    await run_sudo_cmd(["ip", "link", "set", tap, "up"], check=False)
-    await run_sudo_cmd(["brctl", "addif", bridge, tap], check=False)
+    await run_privileged_cmd(["ip", "tuntap", "add", "dev", tap, "mode", "tap", "user", user], check=False)
+    await run_privileged_cmd(["ip", "link", "set", tap, "up"], check=False)
+    await run_privileged_cmd(["brctl", "addif", bridge, tap], check=False)
 
 async def remove_tap(tap: str, bridge: str) -> None:
     """
     将网卡移出网桥并删除 TAP 设备 (需要 root 特权)。
     """
-    await run_sudo_cmd(["brctl", "delif", bridge, tap], check=False)
-    await run_sudo_cmd(["ip", "link", "delete", tap], check=False)
+    await run_privileged_cmd(["brctl", "delif", bridge, tap], check=False)
+    await run_privileged_cmd(["ip", "link", "delete", tap], check=False)
 
 async def bridge_exists(bridge: str) -> bool:
     """
@@ -72,8 +79,8 @@ async def ensure_bridge_setup(bridge: str, host_ip: str | None = None) -> None:
     """
     if not await bridge_exists(bridge):
         logger.info(f"网桥 {bridge} 不存在，正在以特权自动创建...")
-        await run_sudo_cmd(["ip", "link", "add", "name", bridge, "type", "bridge"], check=False)
-        await run_sudo_cmd(["ip", "link", "set", bridge, "up"], check=False)
+        await run_privileged_cmd(["ip", "link", "add", "name", bridge, "type", "bridge"], check=False)
+        await run_privileged_cmd(["ip", "link", "set", bridge, "up"], check=False)
         
     if host_ip:
         # 检查是否已分配该 IP，没有则添加
@@ -86,6 +93,6 @@ async def ensure_bridge_setup(bridge: str, host_ip: str | None = None) -> None:
             stdout, _ = await proc.communicate()
             if host_ip not in stdout.decode():
                 logger.info(f"为网桥 {bridge} 分配 Host 端口 IP: {host_ip}/24...")
-                await run_sudo_cmd(["ip", "addr", "add", f"{host_ip}/24", "dev", bridge], check=False)
+                await run_privileged_cmd(["ip", "addr", "add", f"{host_ip}/24", "dev", bridge], check=False)
         except Exception as e:
             logger.warning(f"检查或分配网桥 {bridge} 的 IP 失败: {e}")

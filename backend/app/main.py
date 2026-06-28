@@ -17,6 +17,7 @@ import redis
 logger = logging.getLogger(__name__)
 
 def ensure_redis_service(settings) -> bool:
+    import os
     redis_client = redis.from_url(settings.REDIS_URL)
     try:
         redis_client.ping()
@@ -24,15 +25,17 @@ def ensure_redis_service(settings) -> bool:
     except Exception:
         pass
     
-    logger.warning("检测到 Redis 服务未运行，正在尝试使用 sudo 特权自动拉起...")
+    logger.warning("检测到 Redis 服务未运行，正在尝试自动拉起...")
+    is_root = os.getuid() == 0 if hasattr(os, "getuid") else False
+    
     try:
-        proc = subprocess.Popen(
-            ["sudo", "-S", "systemctl", "start", "redis-server"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-        stdout, stderr = proc.communicate(input=b"kali\n")
+        # 如果当前进程是 root，可直接运行 systemctl。如果不是，尝试非交互式 sudo -n 启动。
+        cmd = ["systemctl", "start", "redis-server"]
+        if not is_root:
+            cmd = ["sudo", "-n", "systemctl", "start", "redis-server"]
+            
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        stdout, stderr = proc.communicate()
         if proc.returncode == 0:
             import time
             time.sleep(1)
@@ -45,13 +48,13 @@ def ensure_redis_service(settings) -> bool:
         
         err_msg = stderr.decode().strip()
         logger.error(
-            f"【环境警告】Redis 自动启动失败！需要您以 sudo 特权手动运行。\n"
-            f"错误码: {proc.returncode}, 详情: {err_msg}\n"
-            f"👉 请在终端执行启动命令: sudo systemctl start redis-server"
+            f"【环境警告】Redis 服务未启动且自动拉起失败（当前运行用户非 root 或无免密 sudo 权限）。\n"
+            f"👉 请以 sudo 启动后端服务以授权自动拉起: sudo ../backend/.venv/bin/uvicorn app.main:app --reload\n"
+            f"👉 或者在终端手动运行命令启动服务: sudo systemctl start redis-server"
         )
     except Exception as e:
         logger.error(
-            f"【环境警告】自动拉起 Redis 发生异常: {e}\n"
+            f"【环境警告】尝试启动 Redis 服务时发生异常: {e}\n"
             f"👉 请在终端手动执行命令启动服务: sudo systemctl start redis-server"
         )
     return False
