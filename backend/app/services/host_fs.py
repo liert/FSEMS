@@ -28,13 +28,33 @@ def resolve_workspace_path(relative: str) -> Path:
 
 def list_directory(path: Path) -> list[dict]:
     entries = []
-    for entry in sorted(path.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
-        stat = entry.stat()
+    try:
+        items = list(path.iterdir())
+    except OSError:
+        return []
+
+    def is_dir_safe(p: Path) -> bool:
+        try:
+            return p.is_dir()
+        except Exception:
+            return False
+
+    for entry in sorted(items, key=lambda p: (not is_dir_safe(p), p.name.lower())):
+        try:
+            stat = entry.stat()
+            is_dir = entry.is_dir()
+        except (FileNotFoundError, OSError):
+            try:
+                stat = entry.stat(follow_symlinks=False)
+                is_dir = False
+            except Exception:
+                continue
+
         entries.append(
             {
                 "name": entry.name,
                 "path": str(entry),
-                "is_dir": entry.is_dir(),
+                "is_dir": is_dir,
                 "size": stat.st_size,
                 "mtime": int(stat.st_mtime),
             }
