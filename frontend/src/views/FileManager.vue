@@ -93,12 +93,12 @@
         <div class="pane-header">
           <div class="pane-header-top">
             <div class="pane-title">
-              <span class="pulse-indicator guest-pulse" :class="{ 'offline': instanceStatus !== 'RUNNING' }"></span>
+              <span class="pulse-indicator guest-pulse" :class="{ 'offline': props.instanceStatus !== 'RUNNING' }"></span>
               虚拟机 (Guest)
             </div>
             
             <!-- 虚拟机智能地址栏 (仅在虚拟机运行时显示) -->
-            <div v-if="instanceStatus === 'RUNNING'" class="address-bar-container">
+            <div v-if="props.instanceStatus === 'RUNNING'" class="address-bar-container">
               <!-- 编辑态：显示路径输入框 -->
               <el-input
                 v-if="guestEditingPath"
@@ -133,20 +133,20 @@
         </div>
 
         <!-- 虚拟机未运行就绪时的占位符 -->
-        <div v-if="instanceStatus !== 'RUNNING'" class="placeholder-card glass-placeholder guest-offline-placeholder">
+        <div v-if="props.instanceStatus !== 'RUNNING'" class="placeholder-card glass-placeholder guest-offline-placeholder">
           <el-icon class="placeholder-icon text-green"><FolderOpened /></el-icon>
           <h3>虚拟机网络及 SSH 未就绪</h3>
           <p class="desc-text">文件管理器需要虚拟机处于运行中且 SSH 服务正常响应。</p>
-          <p>当前状态: <el-tag :type="statusTagType" size="small">{{ statusTextCn }}</el-tag></p>
+          <p>当前状态: <el-tag :type="vmStatusTagType" size="small">{{ vmStatusTextCn }}</el-tag></p>
           <el-button 
             type="success" 
             size="large" 
             class="glow-action-btn green-glow mini-btn" 
-            :disabled="instanceStatus === 'STARTING' || instanceStatus === 'STOPPING'"
+            :disabled="props.instanceStatus === 'STARTING' || props.instanceStatus === 'STOPPING'"
             @click="emit('start-instance')"
             style="margin-top: 14px;"
           >
-            {{ instanceStatus === 'STARTING' ? '虚拟机启动中，请稍候...' : '启动虚拟机' }}
+            {{ props.instanceStatus === 'STARTING' ? '虚拟机启动中，请稍候...' : '启动虚拟机' }}
           </el-button>
         </div>
 
@@ -288,7 +288,7 @@ const emit = defineEmits<{
   (e: "start-instance"): void;
 }>();
 
-const statusTextCn = computed(() => {
+const vmStatusTextCn = computed(() => {
   const statusMap: Record<string, string> = {
     LOADING: "加载中...",
     STARTING: "启动中",
@@ -299,7 +299,7 @@ const statusTextCn = computed(() => {
   return statusMap[props.instanceStatus] || props.instanceStatus;
 });
 
-const statusTagType = computed(() => {
+const vmStatusTagType = computed(() => {
   if (props.instanceStatus === "RUNNING") return "success";
   if (props.instanceStatus === "STARTING") return "warning";
   if (props.instanceStatus === "STOPPED") return "info";
