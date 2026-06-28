@@ -97,45 +97,80 @@ import shutil
 
 def extract_archive(archive_path: Path, dest_dir: Path) -> None:
     dest_dir.mkdir(parents=True, exist_ok=True)
-    suffix = archive_path.suffix.lower()
-    name = archive_path.name.lower()
     
-    if name.endswith(".tar.gz") or name.endswith(".tgz"):
-        with tarfile.open(archive_path, "r:gz") as tar:
-            tar.extractall(path=dest_dir)
-    elif name.endswith(".tar.xz"):
-        with tarfile.open(archive_path, "r:xz") as tar:
-            tar.extractall(path=dest_dir)
-    elif name.endswith(".tar.bz2"):
-        with tarfile.open(archive_path, "r:bz2") as tar:
-            tar.extractall(path=dest_dir)
-    elif suffix == ".tar":
-        with tarfile.open(archive_path, "r:") as tar:
-            tar.extractall(path=dest_dir)
-    elif suffix == ".zip":
-        with zipfile.ZipFile(archive_path, "r") as zip_ref:
-            zip_ref.extractall(dest_dir)
-    elif name.endswith(".img.gz") or suffix == ".gz":
-        import gzip
-        import subprocess
-        # 1. 解压 gz 得到临时的 raw img 文件
-        temp_img = dest_dir.parent / f"temp_{archive_path.stem}"
-        with gzip.open(archive_path, "rb") as f_in:
-            with open(temp_img, "wb") as f_out:
-                shutil.copyfileobj(f_in, f_out)
+    # 1. 使用 file 命令分析物理文件类型
+    import subprocess
+    try:
+        proc = subprocess.run(["file", str(archive_path)], capture_output=True, text=True, check=True)
+        file_info = proc.stdout.lower()
+    except Exception as e:
+        logger.warning(f"无法运行 file 命令分析文件类型: {e}，将采用后缀匹配兜底")
+        file_info = ""
         
-        # 2. 调用 debugfs 在用户空间免挂载递归提取 ext4 分区内容到 dest_dir
-        cmd = ["debugfs", "-R", f"rdump / {dest_dir}", str(temp_img)]
+    logger.info(f"RootFS 分析结果: {archive_path.name} -> {file_info.strip()}")
+    
+    # 2. 根据分析出的具体文件系统类型执行解压
+    if "squashfs" in file_info or archive_path.name.lower().endswith(".squashfs") or archive_path.name.lower().endswith(".squash"):
+        logger.info(f"检测到 SquashFS 文件系统。正在运行 unsquashfs 提取...")
+        cmd = ["unsquashfs", "-d", str(dest_dir), "-f", str(archive_path)]
         try:
             subprocess.run(cmd, capture_output=True, text=True, check=True)
         except subprocess.CalledProcessError as e:
-            logger.error(f"debugfs rdump failed: {e.stderr}")
+            logger.error(f"unsquashfs 提取失败: {e.stderr}")
+            raise RuntimeError(f"unsquashfs 提取失败: {e.stderr}")
+            
+    elif "ext" in file_info and "filesystem" in file_info:
+        logger.info(f"检测到 ext2/3/4 文件系统。正在运行 debugfs rdump 提取...")
+        cmd = ["debugfs", "-R", f"rdump / {dest_dir}", str(archive_path)]
+        try:
+            subprocess.run(cmd, capture_output=True, text=True, check=True)
+        except subprocess.CalledProcessError as e:
+            logger.error(f"debugfs rdump 提取失败: {e.stderr}")
             raise RuntimeError(f"debugfs rdump 提取失败: {e.stderr}")
+            
+    elif "gzip compressed" in file_info or archive_path.suffix.lower() == ".gz":
+        logger.info(f"检测到 Gzip 压缩包。正在解压...")
+        import gzip
+        temp_decompressed = dest_dir.parent / f"temp_decompressed_{uuid.uuid4()}"
+        try:
+            with gzip.open(archive_path, "rb") as f_in:
+                with open(temp_decompressed, "wb") as f_out:
+                    shutil.copyfileobj(f_in, f_out)
+            
+            # 递归对解压后的临时文件进行文件类型分析和最终解压提取
+            extract_archive(temp_decompressed, dest_dir)
         finally:
-            if temp_img.exists():
-                temp_img.unlink()
+            if temp_decompressed.exists():
+                temp_decompressed.unlink()
+                
+    elif "tar archive" in file_info or archive_path.name.lower().endswith(".tar"):
+        logger.info(f"检测到 tar 归档。正在提取...")
+        with tarfile.open(archive_path, "r:") as tar:
+            tar.extractall(path=dest_dir)
+            
+    elif "zip archive" in file_info or archive_path.name.lower().endswith(".zip"):
+        logger.info(f"检测到 zip 归档。正在提取...")
+        with zipfile.ZipFile(archive_path, "r") as zip_ref:
+            zip_ref.extractall(dest_dir)
+            
     else:
-        raise ValueError(f"不支持的根文件系统压缩包格式: {archive_path.name}")
+        # 后缀名兜底匹配逻辑
+        suffix = archive_path.suffix.lower()
+        name = archive_path.name.lower()
+        if name.endswith(".tar.gz") or name.endswith(".tgz"):
+            with tarfile.open(archive_path, "r:gz") as tar:
+                tar.extractall(path=dest_dir)
+        elif name.endswith(".tar.xz"):
+            with tarfile.open(archive_path, "r:xz") as tar:
+                tar.extractall(path=dest_dir)
+        elif name.endswith(".tar.bz2"):
+            with tarfile.open(archive_path, "r:bz2") as tar:
+                tar.extractall(path=dest_dir)
+        elif suffix == ".zip":
+            with zipfile.ZipFile(archive_path, "r") as zip_ref:
+                zip_ref.extractall(dest_dir)
+        else:
+            raise ValueError(f"无法确定该文件系统的具体类型，不支持的格式: {archive_path.name}")
 
 
 async def create_instance(
