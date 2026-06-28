@@ -263,7 +263,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import {
   FolderOpened,
   Folder,
@@ -649,18 +649,42 @@ const statusTagType = computed(() => {
 
 // 发起文件/目录传输
 async function initiateTransfer(direction: "host_to_guest" | "guest_to_host", file: FileEntry) {
+  const fileName = file.name;
   let src = file.path;
   let dest = "";
 
   if (direction === "host_to_guest") {
-    const fileName = file.name;
     const remoteDir = guestCurrentPath.value;
     dest = remoteDir.endsWith("/") ? remoteDir + fileName : remoteDir + "/" + fileName;
   } else {
-    const fileName = file.name;
     dest = hostRelativePath.value.endsWith("/") 
       ? hostRelativePath.value + fileName 
       : hostRelativePath.value + "/" + fileName;
+  }
+
+  // 存在时询问是否覆盖
+  let exists = false;
+  if (direction === "host_to_guest") {
+    exists = guestFiles.value.some(f => f.name === fileName && !f.is_dir);
+  } else {
+    exists = hostFiles.value.some(f => f.name === fileName && !f.is_dir);
+  }
+
+  if (exists) {
+    try {
+      await ElMessageBox.confirm(
+        `目标位置已存在同名文件 "${fileName}"，是否确定覆盖？`,
+        "覆盖确认",
+        {
+          confirmButtonText: "覆盖",
+          cancelButtonText: "取消",
+          type: "warning",
+        }
+      );
+    } catch {
+      // 用户取消了传输
+      return;
+    }
   }
 
   currentTaskDetails.value = { src, dest };
