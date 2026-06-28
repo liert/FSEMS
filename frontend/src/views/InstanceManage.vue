@@ -68,24 +68,12 @@
         
         <el-tab-pane label="文件管理器" name="files">
           <div class="tab-pane-content">
-            <!-- 虚拟机未完全就绪运行，显示文件管理启动引导占位符 -->
-            <div v-if="instanceStatus !== 'RUNNING'" class="placeholder-card glass-placeholder">
-              <el-icon class="placeholder-icon text-green"><FolderOpened /></el-icon>
-              <h3>虚拟机网络及 SSH 未就绪</h3>
-              <p>文件管理器需要虚拟机处于运行中且 SSH 服务正常响应。当前状态: {{ instanceStatus }}</p>
-              <el-button 
-                type="success" 
-                size="large" 
-                class="glow-action-btn green-glow" 
-                :disabled="instanceStatus === 'STARTING' || instanceStatus === 'STOPPING'"
-                @click="doAction('start')"
-              >
-                {{ instanceStatus === 'STARTING' ? '虚拟机启动中，请稍候...' : '启动虚拟机' }}
-              </el-button>
-            </div>
-            <!-- 虚拟机已启动，渲染双栏文件管理器 -->
-            <div v-else class="tab-pane-fill">
-              <FileManager :instance-id="instanceId" />
+            <div class="tab-pane-fill">
+              <FileManager 
+                :instance-id="instanceId" 
+                :instance-status="instanceStatus"
+                @start-instance="doAction('start')"
+              />
             </div>
           </div>
         </el-tab-pane>

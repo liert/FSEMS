@@ -93,12 +93,12 @@
         <div class="pane-header">
           <div class="pane-header-top">
             <div class="pane-title">
-              <span class="pulse-indicator guest-pulse"></span>
+              <span class="pulse-indicator guest-pulse" :class="{ 'offline': instanceStatus !== 'RUNNING' }"></span>
               虚拟机 (Guest)
             </div>
             
-            <!-- 虚拟机智能地址栏 -->
-            <div class="address-bar-container">
+            <!-- 虚拟机智能地址栏 (仅在虚拟机运行时显示) -->
+            <div v-if="instanceStatus === 'RUNNING'" class="address-bar-container">
               <!-- 编辑态：显示路径输入框 -->
               <el-input
                 v-if="guestEditingPath"
@@ -132,7 +132,26 @@
           </div>
         </div>
 
-        <div class="file-list-wrapper" v-loading="guestLoading" element-loading-background="rgba(20, 20, 25, 0.8)">
+        <!-- 虚拟机未运行就绪时的占位符 -->
+        <div v-if="instanceStatus !== 'RUNNING'" class="placeholder-card glass-placeholder guest-offline-placeholder">
+          <el-icon class="placeholder-icon text-green"><FolderOpened /></el-icon>
+          <h3>虚拟机网络及 SSH 未就绪</h3>
+          <p class="desc-text">文件管理器需要虚拟机处于运行中且 SSH 服务正常响应。</p>
+          <p>当前状态: <el-tag :type="statusTagType" size="small">{{ statusTextCn }}</el-tag></p>
+          <el-button 
+            type="success" 
+            size="large" 
+            class="glow-action-btn green-glow mini-btn" 
+            :disabled="instanceStatus === 'STARTING' || instanceStatus === 'STOPPING'"
+            @click="emit('start-instance')"
+            style="margin-top: 14px;"
+          >
+            {{ instanceStatus === 'STARTING' ? '虚拟机启动中，请稍候...' : '启动虚拟机' }}
+          </el-button>
+        </div>
+
+        <!-- 虚拟机运行中时的文件列表 -->
+        <div v-else class="file-list-wrapper" v-loading="guestLoading" element-loading-background="rgba(20, 20, 25, 0.8)">
           <el-table
             ref="guestTableRef"
             :data="guestFiles"
@@ -262,7 +281,30 @@ import type { FileEntry } from "@/api/types";
 
 const props = defineProps<{
   instanceId: string;
+  instanceStatus: string;
 }>();
+
+const emit = defineEmits<{
+  (e: "start-instance"): void;
+}>();
+
+const statusTextCn = computed(() => {
+  const statusMap: Record<string, string> = {
+    LOADING: "加载中...",
+    STARTING: "启动中",
+    RUNNING: "运行中",
+    STOPPING: "停止中",
+    STOPPED: "已停止",
+  };
+  return statusMap[props.instanceStatus] || props.instanceStatus;
+});
+
+const statusTagType = computed(() => {
+  if (props.instanceStatus === "RUNNING") return "success";
+  if (props.instanceStatus === "STARTING") return "warning";
+  if (props.instanceStatus === "STOPPED") return "info";
+  return "danger";
+});
 
 // 绑定根容器引用以精准计算右键绝对坐标
 const fileManagerRef = ref<HTMLElement | null>(null);
@@ -496,6 +538,10 @@ async function loadHostFiles() {
 
 // 加载访客机文件列表
 async function loadGuestFiles() {
+  if (props.instanceStatus !== "RUNNING") {
+    guestFiles.value = [];
+    return;
+  }
   guestLoading.value = true;
   selectedGuestFile.value = null;
   try {
@@ -507,6 +553,15 @@ async function loadGuestFiles() {
     guestLoading.value = false;
   }
 }
+
+// 监听实例状态改变以加载或清除虚机文件列表
+watch(() => props.instanceStatus, (newVal) => {
+  if (newVal === "RUNNING") {
+    loadGuestFiles();
+  } else {
+    guestFiles.value = [];
+  }
+});
 
 // 宿主机目录双击深入
 function enterHostDir(dirName: string) {
@@ -958,5 +1013,72 @@ onBeforeUnmount(() => {
 .menu-item:hover {
   background: rgba(56, 189, 248, 0.18);
   color: #38bdf8;
+}
+
+/* 虚拟机未启动占位符样式 */
+.guest-offline-placeholder {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  background: rgba(255, 255, 255, 0.01) !important;
+  border: 1.5px dashed rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  margin: 20px;
+  text-align: center;
+  box-sizing: border-box;
+}
+
+.guest-offline-placeholder .placeholder-icon {
+  font-size: 3rem;
+  margin-bottom: 12px;
+}
+
+.text-green {
+  color: #10b981;
+  filter: drop-shadow(0 0 10px rgba(16, 185, 129, 0.3));
+}
+
+.guest-offline-placeholder h3 {
+  font-size: 1.15rem;
+  margin: 0 0 10px 0;
+  color: #f1f5f9;
+}
+
+.guest-offline-placeholder p {
+  font-size: 0.85rem;
+  color: #94a3b8;
+  margin: 4px 0;
+}
+
+.guest-offline-placeholder .desc-text {
+  max-width: 320px;
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+
+.glow-action-btn {
+  font-weight: 600;
+  transition: all 0.3s ease;
+}
+
+.glow-action-btn:hover {
+  transform: translateY(-1px);
+}
+
+.green-glow {
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.25);
+}
+
+.green-glow:hover {
+  box-shadow: 0 0 20px rgba(16, 185, 129, 0.5);
+}
+
+.pulse-indicator.offline {
+  background-color: #64748b !important;
+  box-shadow: none !important;
+  animation: none !important;
 }
 </style>
