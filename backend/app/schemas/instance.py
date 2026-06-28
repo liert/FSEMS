@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class InstanceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     template_id: int
+    rootfs_path: str | None = None
 
 
 class InstanceAction(BaseModel):

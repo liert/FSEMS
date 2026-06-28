@@ -44,7 +44,10 @@
             <el-option v-for="t in templates" :key="t.id" :label="t.name" :value="t.id" />
           </el-select>
         </el-form-item>
-        <!-- 自动根据所选启动模板设置对应版本的内核路径与文件系统 -->
+        <!-- 自动根据所选启动模板设置对应版本的默认内核与文件系统。若需模拟特定固件，可在下方指定自定义 RootFS -->
+        <el-form-item label="自定义RootFS (可选)">
+          <el-input v-model="newRootfsPath" placeholder="可选输入宿主机上的压缩包或文件夹路径作为自定义系统" />
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="cancelCreate">取消</el-button>
@@ -77,7 +80,8 @@ const newName = ref("");
 const newTemplateId = ref<number | null>(null);
 const creating = ref(false);
 
-// 无需手动输入路径，根据模板版本与架构自动设置
+// 本地自定义 RootFS 文件或目录物理路径
+const newRootfsPath = ref("");
 
 function statusType(status: string) {
   if (status === "RUNNING") return "success";
@@ -134,7 +138,8 @@ async function create() {
   try {
     await createInstance(
       newName.value,
-      newTemplateId.value
+      newTemplateId.value,
+      newRootfsPath.value.trim()
     );
     showCreate.value = false;
     resetForm();
@@ -154,6 +159,7 @@ function cancelCreate() {
 
 function resetForm() {
   newName.value = "";
+  newRootfsPath.value = "";
 }
 
 function logout() {

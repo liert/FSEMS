@@ -25,12 +25,14 @@ export function fetchInstanceDetail(id: string) {
 
 export function createInstance(
   name: string,
-  templateId: number
+  templateId: number,
+  rootfsPath?: string
 ) {
   return unwrap(
     request.post<ApiResponse<{ id: string; status: string }>>("/instances", {
       name,
       template_id: templateId,
+      rootfs_path: rootfsPath || null,
     })
   );
 }

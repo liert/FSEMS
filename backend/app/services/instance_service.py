@@ -142,6 +142,7 @@ async def create_instance(
     session: AsyncSession,
     name: str,
     template_id: int,
+    rootfs_path: str | None = None,
 ) -> Instance:
     template = await session.get(Template, template_id)
     if not template:
@@ -150,35 +151,58 @@ async def create_instance(
     settings = get_settings()
     settings.ensure_dirs()
     instance_id = f"inst_{uuid.uuid4()}"
+    inst_workspace = Path(settings.FSEMS_WORKSPACE) / instance_id
+    inst_workspace.mkdir(parents=True, exist_ok=True)
     
-    # 自动定位该启动模板对应的 RootFS 预置压缩包
-    drive_path_obj = Path(template.drive_path)
-    rootfs_archive = drive_path_obj.parent.parent / "rootfs_archives" / f"{drive_path_obj.name}.gz"
-    
-    if not rootfs_archive.exists():
-        logger.warning(f"模板对应的 RootFS 预置压缩包不存在: {rootfs_archive}，工作空间暂不部署预置文件系统")
-    else:
-        inst_workspace = Path(settings.FSEMS_WORKSPACE) / instance_id
-        inst_workspace.mkdir(parents=True, exist_ok=True)
-        
+    # 优先部署用户指定的自定义 RootFS 路径，若未指定则自动定位模板匹配的默认 RootFS
+    if rootfs_path and rootfs_path.strip():
+        custom_rootfs = Path(rootfs_path.strip())
+        if not custom_rootfs.exists():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error_code": "PATH_NOT_FOUND", "message": f"指定的 RootFS 自定义路径不存在: {rootfs_path}"},
+            )
         try:
-            logger.info(f"自动为新实例解包部署 RootFS: {rootfs_archive} -> {inst_workspace}")
-            extract_archive(rootfs_archive, inst_workspace)
+            if custom_rootfs.is_file():
+                logger.info(f"为新实例部署用户指定的 RootFS 压缩包: {custom_rootfs} -> {inst_workspace}")
+                extract_archive(custom_rootfs, inst_workspace)
+            elif custom_rootfs.is_dir():
+                logger.info(f"为新实例部署用户指定的 RootFS 文件夹目录: {custom_rootfs} -> {inst_workspace}")
+                shutil.copytree(custom_rootfs, inst_workspace, symlinks=True, dirs_exist_ok=True)
         except Exception as e:
-            logger.error(f"部署根文件系统失败: {e}")
+            logger.error(f"部署自定义 RootFS 失败: {e}")
             if inst_workspace.exists():
                 shutil.rmtree(inst_workspace, ignore_errors=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error_code": "ROOTFS_SETUP_FAILED", "message": f"默认文件系统部署失败: {str(e)}"},
+                detail={"error_code": "ROOTFS_SETUP_FAILED", "message": f"部署自定义根文件系统失败: {str(e)}"},
             )
+    else:
+        # 自动定位模板匹配的默认 RootFS 压缩包
+        drive_path_obj = Path(template.drive_path)
+        rootfs_archive = drive_path_obj.parent.parent / "rootfs" / f"{drive_path_obj.name}.gz"
+        
+        if not rootfs_archive.exists():
+            logger.warning(f"模板对应的 RootFS 预置压缩包不存在: {rootfs_archive}，工作空间暂不部署预置文件系统")
+        else:
+            try:
+                logger.info(f"自动为新实例解包部署模板匹配的默认 RootFS: {rootfs_archive} -> {inst_workspace}")
+                extract_archive(rootfs_archive, inst_workspace)
+            except Exception as e:
+                logger.error(f"解包默认文件系统失败: {e}")
+                if inst_workspace.exists():
+                    shutil.rmtree(inst_workspace, ignore_errors=True)
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail={"error_code": "ROOTFS_SETUP_FAILED", "message": f"默认文件系统部署失败: {str(e)}"},
+                )
 
     instance = Instance(
         id=instance_id,
         name=name,
         template_id=template_id,
         status="STOPPED",
-        drive_path=None,
+        drive_path=None,  # 启动时自动安全回退到 template.drive_path
         guest_ssh_host=template.guest_ssh_host,
     )
     session.add(instance)
