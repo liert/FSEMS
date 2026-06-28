@@ -100,62 +100,36 @@ async def console_ws(websocket: WebSocket, instance_id: str, token: str | None =
         await websocket.close(code=4401)
         return
 
-    from app.core.database import SessionLocal
+    from app.services import qemu_manager
 
-    async with SessionLocal() as session:
-        try:
-            instance = await get_instance(session, instance_id)
-        except Exception:
-            await websocket.close(code=4404)
-            return
-        serial_path = instance.serial_socket
-
-    if not serial_path:
-        await websocket.close(code=4400, reason="Serial socket not configured")
+    try:
+        # 1. 获取或自动建立该实例的串口背景读取器
+        cb = qemu_manager.ensure_console_reader(instance_id)
+    except Exception as e:
+        logger.error(f"无法初始化串口监听: {e}")
+        await websocket.close(code=4404, reason="Console initialization failed")
         return
 
-    reader_task = None
+    # 2. 发送已保存的历史输出，默认最大 1000 行
+    history = b"".join(list(cb.lines))
+    if cb.current_line:
+        history += bytes(cb.current_line)
+    if history:
+        await websocket.send_bytes(history)
+
+    # 3. 将当前 websocket 追加到广播列表
+    cb.websockets.add(websocket)
+
     try:
-        while not await _socket_exists(serial_path):
-            await asyncio.sleep(0.2)
-
-        reader, writer = await asyncio.open_unix_connection(serial_path)
-
-        async def read_serial() -> None:
-            try:
-                while True:
-                    data = await reader.read(4096)
-                    if not data:
-                        break
-                    await websocket.send_bytes(data)
-            except (WebSocketDisconnect, asyncio.CancelledError):
-                pass
-
-        reader_task = asyncio.create_task(read_serial())
-
         while True:
             message = await websocket.receive()
             if message.get("type") == "websocket.disconnect":
                 break
             if "bytes" in message and message["bytes"]:
-                writer.write(message["bytes"])
-                await writer.drain()
+                cb.write_bytes(message["bytes"])
             elif "text" in message and message["text"] == "ping":
                 await websocket.send_text("pong")
     except WebSocketDisconnect:
         pass
     finally:
-        if reader_task:
-            reader_task.cancel()
-        try:
-            writer.close()
-            await writer.wait_closed()
-        except Exception:
-            pass
-        await websocket.close(code=1000)
-
-
-async def _socket_exists(path: str) -> bool:
-    from pathlib import Path
-
-    return Path(path).exists()
+        cb.websockets.discard(websocket)
