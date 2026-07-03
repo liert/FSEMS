@@ -34,7 +34,7 @@ Vue 3 + TS + Element Plus + Xterm.js | FastAPI + SQLAlchemy + aiosqlite + Celery
 ## 本地开发
 
 ```bash
-sudo ./scripts/install_host_deps.sh
+# 依赖安装（请参考 README.md「快速开始」使用 apt 独立安装各依赖与 Redis）
 sudo ./scripts/setup_network.sh
 cp .env.example .env
 sudo mkdir -p /var/fsems/{data,workspace,images,kernels,mnt}

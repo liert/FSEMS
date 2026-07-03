@@ -4,13 +4,6 @@
 
 基于 Web 统一管理 QEMU 上的 OpenWrt 固件实例：生命周期、控制台、宿主机/访客机双栏文件浏览与 SCP 传输。
 
-## 文档
-
-| 文件 | 说明 |
-| :--- | :--- |
-| [AGENTS.md](AGENTS.md) | AI 编码代理指南 |
-| [docs/FSEMS_development_document.md](docs/FSEMS_development_document.md) | 完整开发规格 |
-
 ## 架构要点
 
 - 全宿主机原生运行（无 Docker）
@@ -21,15 +14,23 @@
 ## 快速开始
 
 ```bash
-sudo ./scripts/install_host_deps.sh
+# 安装系统依赖
+sudo apt update
+sudo apt install -y qemu-system qemu-utils e2fsprogs bridge-utils uml-utilities libguestfs-tools iptables redis-server
+
+# 启动并启用 Redis
+sudo systemctl enable --now redis-server
+
+# 配置网络网桥
 sudo ./scripts/setup_network.sh
+
 cp .env.example .env
 # 编辑 .env：至少设置 FSEMS_GUEST_SSH_PASSWORD
 sudo mkdir -p /var/fsems/{data,workspace,kernels,rootfs,mnt}
 sudo chown -R "$USER:$USER" /var/fsems
 ```
 
-固件文件放入 `data/kernels/` 与 `data/rootfs/`（生产环境 `/var/fsems/kernels/`、`/var/fsems/rootfs/`）。支持 ARMv8、MIPS、MIPSEL、x86_64，文件名见开发文档 §4.4。
+固件文件放入 `data/kernels/` 与 `data/rootfs/`（生产环境 `/var/fsems/kernels/`、`/var/fsems/rootfs/`）。支持 ARMv8、MIPS、MIPSEL、x86_64 等多架构。
 
 ```bash
 # 开发环境（TAP/guestmount 建议 root 启动后端）
@@ -38,6 +39,25 @@ sudo ./scripts/dev_start.sh
 ```
 
 开发环境也可使用仓库内 `./data/` 路径（见 `.env.example`）。
+
+### Node.js 环境安装（推荐使用 NVM）
+
+前端构建与运行需要 Node.js 24+ 环境，推荐使用 NVM（Node Version Manager）进行安装与管理，以避免与系统自带的 Node 版本冲突：
+
+```bash
+# 下载并安装 nvm：
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+
+# 代替重启 shell：
+\. "$HOME/.nvm/nvm.sh"
+
+# 下载并安装 Node.js：
+nvm install 24
+
+# 验证安装：
+node -v
+npm -v
+```
 
 ## 功能概览
 
@@ -79,9 +99,15 @@ cd frontend && npm run dev
 ## 生产部署
 
 ```bash
-sudo ./scripts/install_host_deps.sh
+# 1. 安装系统依赖并启用 Redis
+sudo apt update
+sudo apt install -y qemu-system qemu-utils e2fsprogs bridge-utils uml-utilities libguestfs-tools iptables redis-server
+sudo systemctl enable --now redis-server
+
+# 2. 配置网络与执行安装脚本
 sudo ./scripts/setup_network.sh
 sudo ./scripts/install_production.sh
+
 # 编辑 /etc/fsems/fsems.env 后：
 sudo systemctl enable --now fsems-api fsems-celery
 ```

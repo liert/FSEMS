@@ -215,7 +215,7 @@ async def list_guest_offline_directory(
 
     raise RuntimeError(
         "离线浏览需要 debugfs（e2fsprogs）或 guestmount（libguestfs-tools）。"
-        "请运行: sudo ./scripts/install_host_deps.sh"
+        "请参考 README.md 安装相应系统依赖包。"
     )
 
 
@@ -227,8 +227,7 @@ async def ensure_offline_mount(instance_id: str, drive_path: Path) -> Path:
     guestmount_bin = _tool_path("guestmount")
     if not guestmount_bin:
         raise RuntimeError(
-            "guestmount 未安装。请运行: sudo ./scripts/install_host_deps.sh "
-            "（安装 libguestfs-tools）"
+            "guestmount 未安装。请参考 README.md 安装 libguestfs-tools 依赖包。"
         )
 
     mount_point = offline_mount_point(instance_id)
