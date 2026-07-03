@@ -1,5 +1,5 @@
 import request, { unwrap } from "./request";
-import type { ApiResponse, Instance, InstanceList, Template, TokenData, BackendLogs, FrontendLogs, HostDirListing, GuestDirListing, TransferTask, TaskStatus } from "./types";
+import type { ApiResponse, Instance, InstanceDetail, InstanceList, Template, TemplateInput, TokenData, BackendLogs, FrontendLogs, HostDirListing, GuestDirListing, TransferTask, TaskStatus, DriveExpandResult, Snapshot, SnapshotList, SnapshotTaskResponse, HostUploadResult } from "./types";
 
 export function login(username: string, password: string) {
   return unwrap(
@@ -7,8 +7,22 @@ export function login(username: string, password: string) {
   );
 }
 
-export function fetchTemplates() {
-  return unwrap(request.get<ApiResponse<Template[]>>("/templates"));
+export function fetchTemplates(arch?: string) {
+  return unwrap(
+    request.get<ApiResponse<Template[]>>("/templates", { params: arch ? { arch } : undefined })
+  );
+}
+
+export function createTemplate(body: TemplateInput) {
+  return unwrap(request.post<ApiResponse<Template>>("/templates", body));
+}
+
+export function updateTemplate(id: number, body: Partial<TemplateInput>) {
+  return unwrap(request.put<ApiResponse<Template>>(`/templates/${id}`, body));
+}
+
+export function deleteTemplate(id: number) {
+  return unwrap(request.delete<ApiResponse<void>>(`/templates/${id}`));
 }
 
 export function fetchInstances(page = 1, limit = 20) {
@@ -19,7 +33,7 @@ export function fetchInstances(page = 1, limit = 20) {
 
 export function fetchInstanceDetail(id: string) {
   return unwrap(
-    request.get<ApiResponse<Instance>>(`/instances/${id}`)
+    request.get<ApiResponse<InstanceDetail>>(`/instances/${id}`)
   );
 }
 
@@ -39,17 +53,64 @@ export function createInstance(
   );
 }
 
-export function instanceAction(id: string, action: "start" | "stop" | "reset") {
+export function instanceAction(
+  id: string,
+  action: "start" | "stop" | "reset",
+  options?: { allowSigkill?: boolean; timeoutMs?: number }
+) {
   return unwrap(
-    request.post<ApiResponse<{ id: string; status: string }>>(`/instances/${id}/action`, {
-      action,
-    })
+    request.post<ApiResponse<{ id: string; status: string }>>(
+      `/instances/${id}/action`,
+      {
+        action,
+        allow_sigkill: options?.allowSigkill,
+      },
+      { timeout: options?.timeoutMs ?? 30000 }
+    )
+  );
+}
+
+export function expandInstanceDrive(
+  instanceId: string,
+  expandMb: number,
+  manageLifecycle = false
+) {
+  return unwrap(
+    request.post<ApiResponse<DriveExpandResult>>(
+      `/instances/${instanceId}/drive/expand`,
+      { expand_mb: expandMb, manage_lifecycle: manageLifecycle },
+      { timeout: 120000 }
+    )
   );
 }
 
 export function deleteInstance(id: string) {
   return unwrap(
     request.delete<ApiResponse<void>>(`/instances/${id}`)
+  );
+}
+
+export function fetchSnapshots(instanceId: string) {
+  return unwrap(request.get<ApiResponse<SnapshotList>>(`/instances/${instanceId}/snapshots`));
+}
+
+export function createSnapshot(instanceId: string, name: string) {
+  return unwrap(
+    request.post<ApiResponse<SnapshotTaskResponse>>(`/instances/${instanceId}/snapshots`, { name })
+  );
+}
+
+export function restoreSnapshot(instanceId: string, snapshotId: string) {
+  return unwrap(
+    request.post<ApiResponse<SnapshotTaskResponse>>(
+      `/instances/${instanceId}/snapshots/${snapshotId}/restore`
+    )
+  );
+}
+
+export function deleteSnapshot(instanceId: string, snapshotId: string) {
+  return unwrap(
+    request.delete<ApiResponse<void>>(`/instances/${instanceId}/snapshots/${snapshotId}`)
   );
 }
 
@@ -101,6 +162,34 @@ export function transferFile(instanceId: string, direction: "host_to_guest" | "g
       src,
       dest,
     })
+  );
+}
+
+export function uploadHostFile(file: File, path: string, instanceId?: string) {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("path", path);
+  if (instanceId) {
+    form.append("instance_id", instanceId);
+  }
+  return unwrap(
+    request.post<ApiResponse<HostUploadResult>>("/fs/host/upload", form, {
+      headers: { "Content-Type": "multipart/form-data" },
+    })
+  );
+}
+
+export function guestFsOp(
+  instanceId: string,
+  op: "mkdir" | "delete" | "rename",
+  path: string,
+  destPath?: string
+) {
+  return unwrap(
+    request.post<ApiResponse<{ op: string; path: string; dest_path?: string | null }>>(
+      `/fs/guest/${instanceId}/ops`,
+      { op, path, dest_path: destPath ?? null }
+    )
   );
 }
 

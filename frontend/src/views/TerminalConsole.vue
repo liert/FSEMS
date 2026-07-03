@@ -1,6 +1,18 @@
-<!-- 串口控制台组件：以嵌入组件形式展示 QEMU 串口，接受 instanceId 作为参数 -->
+<!-- 控制台组件：以嵌入形式展示 QEMU 串口，接受 instanceId 作为参数 -->
 <template>
   <div class="console-wrapper">
+    <div class="console-toolbar">
+      <div class="toolbar-left">
+        <span class="toolbar-title">控制台</span>
+        <span class="toolbar-sub">QEMU · WebSocket</span>
+      </div>
+      <div class="toolbar-right">
+        <span class="conn-pill" :class="{ online: connected }">
+          <span class="conn-dot" />
+          {{ connected ? "已连接" : "连接中…" }}
+        </span>
+      </div>
+    </div>
     <div ref="termEl" class="terminal-body" />
   </div>
 </template>
@@ -24,7 +36,7 @@ let fitAddon: FitAddon | null = null;
 let ws: WebSocket | null = null;
 let pingTimer: ReturnType<typeof setInterval> | null = null;
 
-// 初始化终端和 WebSocket 串口连接
+// 初始化终端和 WebSocket 连接
 function initTerminal() {
   if (!termEl.value) return;
   
@@ -51,7 +63,8 @@ function initTerminal() {
 
   ws.onopen = () => {
     connected.value = true;
-    term?.writeln("\r\n[WebSocket 串口已连接]\r\n");
+    term?.writeln("\r\n[控制台已连接]\r\n");
+    sendTerminalSize();
     pingTimer = setInterval(() => {
       if (ws?.readyState === WebSocket.OPEN) ws.send("ping");
     }, 30000);
@@ -68,11 +81,11 @@ function initTerminal() {
 
   ws.onclose = () => {
     connected.value = false;
-    term?.writeln("\r\n[WebSocket 串口已断开]\r\n");
+    term?.writeln("\r\n[控制台已断开]\r\n");
   };
 
   ws.onerror = () => {
-    term?.writeln("\r\n[WebSocket 串口发生错误]\r\n");
+    term?.writeln("\r\n[控制台连接错误]\r\n");
   };
 
   term.onData((data) => {
@@ -84,8 +97,14 @@ function initTerminal() {
   window.addEventListener("resize", onResize);
 }
 
-function onResize() {
+function sendTerminalSize() {
   fitAddon?.fit();
+  if (!term || !ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+}
+
+function onResize() {
+  sendTerminalSize();
 }
 
 function cleanup() {
@@ -118,15 +137,70 @@ onBeforeUnmount(() => {
   height: 100%;
   background: #181824;
   border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.06);
   overflow: hidden;
 }
 
-/* 已移除 redundant console status bar 样式 */
+.console-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.toolbar-left {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.toolbar-title {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.toolbar-sub {
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
+.conn-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  color: #94a3b8;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.conn-pill.online {
+  color: #34d399;
+  border-color: rgba(52, 211, 153, 0.25);
+  background: rgba(52, 211, 153, 0.08);
+}
+
+.conn-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #64748b;
+}
+
+.conn-pill.online .conn-dot {
+  background: #34d399;
+  box-shadow: 0 0 8px rgba(52, 211, 153, 0.8);
+}
 
 .terminal-body {
   flex: 1;
-  padding: 12px;
+  min-height: 0;
+  padding: 8px 12px 12px;
   background: #181824;
 }
 

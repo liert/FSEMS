@@ -4,23 +4,32 @@ import { login as apiLogin } from "@/api/endpoints";
 
 export const useAuthStore = defineStore("auth", () => {
   const token = ref(localStorage.getItem("fsems_token") || "");
+  const username = ref(localStorage.getItem("fsems_username") || "");
 
   function setToken(value: string) {
     token.value = value;
     localStorage.setItem("fsems_token", value);
   }
 
-  function logout() {
-    token.value = "";
-    localStorage.removeItem("fsems_token");
+  function setUsername(value: string) {
+    username.value = value;
+    localStorage.setItem("fsems_username", value);
   }
 
-  async function login(username: string, password: string) {
-    const data = await apiLogin(username, password);
+  function logout() {
+    token.value = "";
+    username.value = "";
+    localStorage.removeItem("fsems_token");
+    localStorage.removeItem("fsems_username");
+  }
+
+  async function login(user: string, password: string) {
+    const data = await apiLogin(user, password);
     setToken(data.access_token);
+    setUsername(user);
   }
 
   const isLoggedIn = () => !!token.value;
 
-  return { token, setToken, logout, login, isLoggedIn };
+  return { token, username, setToken, setUsername, logout, login, isLoggedIn };
 });

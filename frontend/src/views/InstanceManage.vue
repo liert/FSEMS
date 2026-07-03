@@ -1,45 +1,60 @@
-<!-- 实例管理中心：整合控制台、文件管理与生命周期控制 (启动、停止、重置) -->
+<!-- 实例管理中心：整合控制台、文件管理与生命周期控制 (启动、停止、重启) -->
 <template>
   <div class="manage-center-container">
     <header class="header-section">
       <div class="header-left">
         <div class="header-title-row">
           <h1 class="gradient-title">{{ instanceName || '加载中...' }}</h1>
-          <span class="info-item id-item">ID: {{ instanceId }}</span>
+          <span class="info-item id-item" :title="instanceId">ID: {{ shortInstanceId }}</span>
           <span class="divider">|</span>
           <span class="info-item">
-            状态: 
-            <el-tag :type="statusTagType" size="small" effect="dark">{{ statusTextCn }}</el-tag>
+            状态:
+            <StatusBadge :status="instanceStatus" />
           </span>
         </div>
       </div>
       <div class="header-actions">
-        <el-button-group>
-          <el-button 
-            type="primary" 
-            size="default" 
-            :disabled="instanceStatus === 'RUNNING' || instanceStatus === 'STARTING' || instanceStatus === 'STOPPING'" 
-            @click="doAction('start')"
-          >
-            启动
-          </el-button>
-          <el-button 
-            type="danger" 
-            size="default" 
-            :disabled="instanceStatus === 'STOPPED' || instanceStatus === 'STOPPING'" 
-            @click="doAction('stop')"
-          >
-            停止
-          </el-button>
-          <el-button 
-            type="warning" 
-            size="default" 
-            :disabled="instanceStatus !== 'RUNNING'" 
-            @click="doAction('reset')"
-          >
-            重置
-          </el-button>
-        </el-button-group>
+        <div class="lifecycle-icons">
+          <el-tooltip content="启动" placement="top">
+            <span class="icon-btn-wrap">
+              <el-button
+                type="primary"
+                text
+                class="lifecycle-icon-btn"
+                :disabled="instanceStatus === 'RUNNING' || instanceStatus === 'STARTING' || instanceStatus === 'STOPPING'"
+                @click="doAction('start')"
+              >
+                <el-icon><VideoPlay /></el-icon>
+              </el-button>
+            </span>
+          </el-tooltip>
+          <el-tooltip content="停止" placement="top">
+            <span class="icon-btn-wrap">
+              <el-button
+                type="danger"
+                text
+                class="lifecycle-icon-btn"
+                :disabled="instanceStatus === 'STOPPED' || instanceStatus === 'STOPPING'"
+                @click="doAction('stop')"
+              >
+                <el-icon><SwitchButton /></el-icon>
+              </el-button>
+            </span>
+          </el-tooltip>
+          <el-tooltip content="重启" placement="top">
+            <span class="icon-btn-wrap">
+              <el-button
+                type="warning"
+                text
+                class="lifecycle-icon-btn"
+                :disabled="instanceStatus !== 'RUNNING'"
+                @click="doAction('reset')"
+              >
+                <el-icon><RefreshRight /></el-icon>
+              </el-button>
+            </span>
+          </el-tooltip>
+        </div>
         <el-button class="glass-btn back-btn" @click="goBack">
           <el-icon><Back /></el-icon> 返回列表
         </el-button>
@@ -48,13 +63,24 @@
 
     <div class="tabs-card glass-card">
       <el-tabs v-model="activeTab" class="custom-tabs">
-        <el-tab-pane label="串口控制台" name="console">
+        <el-tab-pane label="基本信息" name="overview">
+          <div class="tab-pane-content">
+            <InstanceOverview
+              :instance-id="instanceId"
+              :refresh-key="overviewRefreshKey"
+              @updated="onOverviewUpdated"
+              @status-changed="instanceStatus = $event"
+            />
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="控制台" name="console">
           <div class="tab-pane-content">
             <!-- 虚拟机已停止时，显示控制台启动引导占位符 -->
             <div v-if="instanceStatus === 'STOPPED'" class="placeholder-card glass-placeholder">
               <el-icon class="placeholder-icon text-blue"><Monitor /></el-icon>
-              <h3>串口控制台不可用</h3>
-              <p>虚拟机当前处于已停止状态。请启动虚拟机以开启串口控制台会话。</p>
+              <h3>控制台不可用</h3>
+              <p>虚拟机当前处于已停止状态。请启动虚拟机以开启控制台会话。</p>
               <el-button type="primary" size="large" class="glow-action-btn" @click="doAction('start')">
                 立即启动虚拟机
               </el-button>
@@ -83,48 +109,47 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, computed } from "vue";
+import { ref, onBeforeUnmount, computed, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { Back, Monitor, FolderOpened } from "@element-plus/icons-vue";
+import { Back, Monitor, VideoPlay, SwitchButton, RefreshRight } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 import { fetchInstanceDetail, instanceAction } from "@/api/endpoints";
+import StatusBadge from "@/components/StatusBadge.vue";
+import { useUiStore } from "@/stores/ui";
+import { shortInstanceId as formatShortInstanceId, statusLabel } from "@/utils/instanceStatus";
 import TerminalConsole from "./TerminalConsole.vue";
 import FileManager from "./FileManager.vue";
+import InstanceOverview from "./InstanceOverview.vue";
 
 const route = useRoute();
 const router = useRouter();
-const instanceId = route.params.id as string;
+const ui = useUiStore();
+const instanceId = computed(() => route.params.id as string);
+
+const shortInstanceId = computed(() => formatShortInstanceId(instanceId.value));
 
 const instanceName = ref("");
 const instanceStatus = ref("LOADING");
-const activeTab = ref("console");
+const activeTab = ref("overview");
+const overviewRefreshKey = ref(0);
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-// 计算标签类型样式
-const statusTagType = computed(() => {
-  if (instanceStatus.value === "RUNNING") return "success";
-  if (instanceStatus.value === "STARTING") return "warning";
-  if (instanceStatus.value === "STOPPED") return "info";
-  return "danger";
-});
+// 计算标签类型样式 — StatusBadge 已接管展示，保留供轮询提示文案
+const statusTextCn = computed(() => statusLabel(instanceStatus.value));
 
-// 计算中文状态显示
-const statusTextCn = computed(() => {
-  const statusMap: Record<string, string> = {
-    LOADING: "加载中...",
-    STARTING: "启动中",
-    RUNNING: "运行中",
-    STOPPING: "停止中",
-    STOPPED: "已停止",
-  };
-  return statusMap[instanceStatus.value] || instanceStatus.value;
-});
+watch(
+  instanceName,
+  (name) => {
+    ui.setPageBreadcrumbLabel(name || null);
+  },
+  { immediate: true }
+);
 
 // 加载实例详细数据并按需调整轮询
 async function loadInstanceDetails() {
   try {
-    const data = await fetchInstanceDetail(instanceId);
+    const data = await fetchInstanceDetail(instanceId.value);
     instanceName.value = data.name;
     instanceStatus.value = data.status;
 
@@ -140,14 +165,15 @@ async function loadInstanceDetails() {
   }
 }
 
-// 执行启动、停止、重置生命周期操作
+// 执行启动、停止、重启生命周期操作
 async function doAction(action: "start" | "stop" | "reset") {
   try {
-    const actionMap = { start: "启动", stop: "停止", reset: "重置" };
+    const actionMap = { start: "启动", stop: "停止", reset: "重启" };
     ElMessage.info(`正在尝试 ${actionMap[action]} 虚拟机...`);
     
-    const updated = await instanceAction(instanceId, action);
+    const updated = await instanceAction(instanceId.value, action);
     instanceStatus.value = updated.status;
+    overviewRefreshKey.value += 1;
     ElMessage.success(`操作 '${actionMap[action]}' 已下发成功`);
 
     // 状态变更为过渡状态，启动轮询
@@ -162,10 +188,11 @@ function startPolling() {
   if (pollTimer) return;
   pollTimer = setInterval(async () => {
     try {
-      const data = await fetchInstanceDetail(instanceId);
+      const data = await fetchInstanceDetail(instanceId.value);
       instanceStatus.value = data.status;
       if (data.status !== "STARTING" && data.status !== "STOPPING") {
         stopPolling();
+        overviewRefreshKey.value += 1;
         ElMessage.success(`虚拟机已成功进入状态: ${data.status}`);
       }
     } catch (e) {
@@ -186,26 +213,32 @@ function goBack() {
   router.push("/instances");
 }
 
-onMounted(() => {
+function onOverviewUpdated() {
+  overviewRefreshKey.value += 1;
   loadInstanceDetails();
-});
+}
+
+watch(instanceId, () => {
+  stopPolling();
+  instanceName.value = "";
+  instanceStatus.value = "LOADING";
+  loadInstanceDetails();
+}, { immediate: true });
 
 onBeforeUnmount(() => {
   stopPolling();
+  ui.setPageBreadcrumbLabel(null);
 });
 </script>
 
 <style scoped>
 .manage-center-container {
-  padding: 24px;
-  background: linear-gradient(135deg, #0f0f15 0%, #171725 100%);
-  height: 100vh;
-  color: #e2e8f0;
-  font-family: 'Outfit', 'Inter', system-ui, -apple-system, sans-serif;
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  box-sizing: border-box;
-  overflow: hidden; /* 绝对禁止整个网页产生滚动条 */
+  color: var(--fsems-text);
+  overflow: hidden;
 }
 
 .header-section {
@@ -233,18 +266,22 @@ onBeforeUnmount(() => {
 }
 
 .divider {
-  color: rgba(255, 255, 255, 0.15);
+  color: var(--fsems-border-strong);
 }
 
 .info-item {
   display: inline-flex;
   align-items: center;
-  color: #94a3b8;
+  color: var(--fsems-text-muted);
   font-size: 0.9rem;
 }
 
 .id-item {
   font-family: monospace;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .header-actions {
@@ -253,19 +290,48 @@ onBeforeUnmount(() => {
   gap: 16px;
 }
 
+.icon-btn-wrap {
+  display: inline-flex;
+  vertical-align: middle;
+}
+
+.lifecycle-icons {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.lifecycle-icon-btn {
+  border: none !important;
+  padding: 6px 8px !important;
+  margin: 0 !important;
+  height: auto !important;
+  min-height: unset !important;
+  background: transparent !important;
+}
+
+.lifecycle-icon-btn .el-icon {
+  font-size: 18px;
+}
+
+.lifecycle-icon-btn:hover {
+  background: rgba(255, 255, 255, 0.08) !important;
+}
+
 .glass-btn {
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  color: #f1f5f9;
+  background: var(--fsems-bg-card);
+  border: 1px solid var(--fsems-border);
+  color: var(--fsems-text);
   backdrop-filter: blur(12px);
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .glass-btn:hover {
-  background: rgba(255, 255, 255, 0.12);
-  border-color: rgba(255, 255, 255, 0.2);
+  background: var(--fsems-bg-elevated);
+  border-color: var(--fsems-border-strong);
   transform: translateY(-2px);
-  color: #fff;
+  color: var(--fsems-text);
 }
 
 .back-btn {
@@ -274,16 +340,16 @@ onBeforeUnmount(() => {
 }
 
 .tabs-card {
-  flex: 1; /* 撑满高度方向的剩余空间 */
+  flex: 1;
   display: flex;
   flex-direction: column;
-  min-height: 0; /* 允许子元素自由缩小，防止撑高 */
+  min-height: 0;
   padding: 16px 24px;
-  border-radius: 16px;
-  background: rgba(23, 23, 37, 0.45);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: var(--fsems-radius-lg);
+  background: var(--fsems-bg-elevated);
+  border: 1px solid var(--fsems-border);
   backdrop-filter: blur(16px);
-  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+  box-shadow: var(--fsems-shadow);
   overflow: hidden;
 }
 
@@ -330,29 +396,27 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 
-/* 自定义 tabs 标签页美化，融入暗色主题 */
+/* tabs 标签页 */
 :deep(.el-tabs__nav-wrap::after) {
-  background-color: rgba(255, 255, 255, 0.05);
+  background-color: var(--fsems-border);
 }
 
 :deep(.el-tabs__item) {
-  color: #94a3b8 !important;
+  color: var(--fsems-text-muted) !important;
   font-weight: 500;
   font-size: 1.05rem;
   transition: all 0.3s ease;
 }
 
 :deep(.el-tabs__item.is-active) {
-  color: #38bdf8 !important;
+  color: var(--fsems-accent) !important;
   font-weight: 600;
-  text-shadow: 0 0 10px rgba(56, 189, 248, 0.3);
 }
 
 :deep(.el-tabs__active-bar) {
-  background-color: #38bdf8;
+  background-color: var(--fsems-accent);
   height: 3px;
   border-radius: 1.5px;
-  box-shadow: 0 0 8px #38bdf8;
 }
 
 /* 占位符卡片 */
@@ -364,13 +428,13 @@ onBeforeUnmount(() => {
   text-align: center;
   padding: 80px 24px;
   border-radius: 12px;
-  color: #cbd5e1;
+  color: var(--fsems-text-muted);
   flex: 1;
 }
 
 .glass-placeholder {
-  background: rgba(255, 255, 255, 0.02);
-  border: 1.5px dashed rgba(255, 255, 255, 0.08);
+  background: var(--fsems-bg-card);
+  border: 1.5px dashed var(--fsems-border);
 }
 
 .placeholder-icon {
@@ -379,24 +443,23 @@ onBeforeUnmount(() => {
 }
 
 .text-blue {
-  color: #38bdf8;
-  filter: drop-shadow(0 0 12px rgba(56, 189, 248, 0.4));
+  color: var(--fsems-accent);
 }
 
 .text-green {
-  color: #10b981;
-  filter: drop-shadow(0 0 12px rgba(16, 185, 129, 0.4));
+  color: var(--fsems-success);
 }
 
 .placeholder-card h3 {
   font-size: 1.4rem;
   font-weight: 600;
   margin: 0 0 10px 0;
+  color: var(--fsems-text);
 }
 
 .placeholder-card p {
   font-size: 0.95rem;
-  color: #94a3b8;
+  color: var(--fsems-text-dim);
   max-width: 460px;
   margin: 0 0 24px 0;
   line-height: 1.6;

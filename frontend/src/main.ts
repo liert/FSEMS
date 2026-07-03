@@ -1,7 +1,14 @@
 import { createApp } from "vue";
 import { createPinia } from "pinia";
 import ElementPlus from "element-plus";
+import zhCn from "element-plus/dist/locale/zh-cn.mjs";
 import "element-plus/dist/index.css";
+import "element-plus/theme-chalk/dark/css-vars.css";
+import "@/styles/theme.css";
+
+import { applyThemeClass, getStoredTheme } from "@/utils/theme";
+
+applyThemeClass(getStoredTheme());
 
 import App from "./App.vue";
 import router from "./router";
@@ -43,5 +50,5 @@ window.addEventListener("unhandledrejection", (event) => {
 
 app.use(createPinia());
 app.use(router);
-app.use(ElementPlus);
+app.use(ElementPlus, { locale: zhCn });
 app.mount("#app");

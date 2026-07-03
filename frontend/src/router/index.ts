@@ -4,11 +4,38 @@ import { useAuthStore } from "@/stores/auth";
 const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: "/login", component: () => import("@/views/Login.vue"), meta: { public: true } },
-    { path: "/", redirect: "/instances" },
-    { path: "/instances", component: () => import("@/views/InstanceList.vue") },
-    { path: "/instances/:id/manage", component: () => import("@/views/InstanceManage.vue") },
-    { path: "/logs", component: () => import("@/views/LogViewer.vue") },
+    {
+      path: "/login",
+      component: () => import("@/views/Login.vue"),
+      meta: { public: true },
+    },
+    {
+      path: "/",
+      component: () => import("@/layouts/AppShell.vue"),
+      children: [
+        { path: "", redirect: "/instances" },
+        {
+          path: "instances",
+          component: () => import("@/views/InstanceList.vue"),
+          meta: { title: "实例管理" },
+        },
+        {
+          path: "templates",
+          component: () => import("@/views/TemplateList.vue"),
+          meta: { title: "固件模板" },
+        },
+        {
+          path: "logs",
+          component: () => import("@/views/LogViewer.vue"),
+          meta: { title: "系统日志" },
+        },
+        {
+          path: "instances/:id/manage",
+          component: () => import("@/views/InstanceManage.vue"),
+          meta: { title: "实例详情", fullBleed: true },
+        },
+      ],
+    },
   ],
 });
 

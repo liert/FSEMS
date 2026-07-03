@@ -9,7 +9,7 @@ celery_app = Celery(
     "fsems",
     broker=settings.REDIS_URL,
     backend=settings.REDIS_URL,
-    include=["app.tasks.file_transfer"]
+    include=["app.tasks.file_transfer", "app.tasks.snapshot_ops"]
 )
 
 # Celery 参数配置

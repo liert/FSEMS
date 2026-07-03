@@ -9,27 +9,95 @@ from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
+# 访客机可能是新版 OpenWrt/Dropbear（现代 KEX）或旧版 Dropbear（仅 SHA1 KEX）。
+# 旧版 Dropbear 在 known_hosts=None 时还会因算法列表过长导致握手 reset（asyncssh #263）。
+_SSH_CONNECT_PROFILES: tuple[dict[str, list[str]], ...] = (
+    {
+        "kex_algs": [
+            "curve25519-sha256",
+            "curve25519-sha256@libssh.org",
+            "ecdh-sha2-nistp256",
+            "diffie-hellman-group16-sha512",
+            "diffie-hellman-group14-sha256",
+        ],
+        "server_host_key_algs": [
+            "ssh-ed25519",
+            "ecdsa-sha2-nistp256",
+            "rsa-sha2-256",
+            "rsa-sha2-512",
+            "ssh-rsa",
+        ],
+        "encryption_algs": [
+            "chacha20-poly1305@openssh.com",
+            "aes128-ctr",
+            "aes256-ctr",
+            "aes128-gcm@openssh.com",
+        ],
+        "mac_algs": [
+            "umac-64-etm@openssh.com",
+            "hmac-sha2-256-etm@openssh.com",
+            "hmac-sha2-256",
+        ],
+    },
+    {
+        "kex_algs": ["diffie-hellman-group14-sha1", "diffie-hellman-group1-sha1"],
+        "server_host_key_algs": ["ssh-rsa"],
+        "encryption_algs": ["aes128-cbc", "3des-cbc"],
+        "mac_algs": ["hmac-sha1", "hmac-md5"],
+    },
+    {
+        "kex_algs": ["diffie-hellman-group1-sha1"],
+        "server_host_key_algs": ["ssh-rsa", "ssh-dss"],
+        "encryption_algs": ["3des-cbc", "aes128-cbc"],
+        "mac_algs": ["hmac-md5", "hmac-sha1"],
+    },
+)
+
+
+class GuestPathNotFoundError(Exception):
+    def __init__(self, path: str, message: str):
+        self.path = path
+        self.message = message
+        super().__init__(message)
+
+
 async def get_ssh_connection(host: str, port: int) -> asyncssh.SSHClientConnection:
     """
-    建立与 QEMU 访客机 (OpenWrt) 的 SSH 连接，并启用旧版加密算法支持。
+    建立与 QEMU 访客机 (OpenWrt) 的 SSH 连接，自动适配新旧 Dropbear/OpenSSH 算法。
     """
     settings = get_settings()
     username = settings.FSEMS_GUEST_SSH_USER or "root"
-    password = settings.FSEMS_GUEST_SSH_PASSWORD or None
+    # OpenWrt root 默认空密码；不能用 `or None`，否则 asyncssh 不会尝试 password 认证
+    password = settings.FSEMS_GUEST_SSH_PASSWORD
 
     logger.info(f"正在建立 SSH 连接: {username}@{host}:{port}")
-    
-    # 允许 asyncssh 自主协商以兼容各种新旧版本 Dropbear (同时禁用 GSSAPI 验证、Agent 及本地私钥扫描，消除握手延迟)
-    return await asyncssh.connect(
-        host,
-        port=port,
-        username=username,
-        password=password,
-        known_hosts=None,
-        gssapi_auth=False,
-        agent_path=None,
-        client_keys=None
-    )
+
+    last_error: Exception | None = None
+    for index, profile in enumerate(_SSH_CONNECT_PROFILES, start=1):
+        try:
+            return await asyncssh.connect(
+                host,
+                port=port,
+                username=username,
+                password=password,
+                known_hosts=None,
+                preferred_auth=["password", "keyboard-interactive"],
+                **profile,
+            )
+        except (asyncssh.Error, OSError, ConnectionError, ConnectionResetError) as exc:
+            last_error = exc
+            logger.warning(
+                "SSH 连接失败 (profile %s/%s) %s@%s:%s: %s",
+                index,
+                len(_SSH_CONNECT_PROFILES),
+                username,
+                host,
+                port,
+                exc,
+            )
+
+    assert last_error is not None
+    raise last_error
 
 # 匹配 ls -la 或 ls -lad 输出的正则表达式
 # 包含权限、硬链接数、拥有者、组、大小、日期、时间/年份、文件名/路径
@@ -112,10 +180,10 @@ async def list_guest_directory(host: str, port: int, path: str) -> list[dict]:
             fallback_cmd = f"ls -la {quoted_path}"
             result = await conn.run(fallback_cmd)
             if result.exit_status != 0:
-                from fastapi import HTTPException, status
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail={"error_code": "FS_PATH_NOT_FOUND", "message": f"目录不存在或无法读取: {path}"}
+                stderr = (result.stderr or "").strip()
+                raise GuestPathNotFoundError(
+                    path,
+                    f"目录不存在或无法读取: {path}" + (f" ({stderr})" if stderr else ""),
                 )
         
         lines = result.stdout.splitlines()
@@ -137,3 +205,42 @@ async def list_guest_directory(host: str, port: int, path: str) -> list[dict]:
     # 按目录优先、字母升序对结果排序
     entries.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
     return entries
+
+
+def normalize_guest_path(path: str) -> str:
+    normalized = posixpath.normpath(path.strip() or "/")
+    if not normalized.startswith("/"):
+        normalized = f"/{normalized}"
+    parts = [p for p in normalized.split("/") if p]
+    if ".." in parts:
+        raise GuestPathNotFoundError(path, "Path outside guest root")
+    return normalized if normalized else "/"
+
+
+async def guest_mkdir(host: str, port: int, path: str) -> None:
+    target = normalize_guest_path(path)
+    quoted = shlex.quote(target)
+    async with await get_ssh_connection(host, port) as conn:
+        result = await conn.run(f"mkdir -p {quoted}")
+        if result.exit_status != 0:
+            raise RuntimeError(result.stderr.strip() or f"mkdir failed: {target}")
+
+
+async def guest_remove(host: str, port: int, path: str) -> None:
+    target = normalize_guest_path(path)
+    if target == "/":
+        raise RuntimeError("Cannot delete root directory")
+    quoted = shlex.quote(target)
+    async with await get_ssh_connection(host, port) as conn:
+        result = await conn.run(f"rm -rf {quoted}")
+        if result.exit_status != 0:
+            raise RuntimeError(result.stderr.strip() or f"delete failed: {target}")
+
+
+async def guest_rename(host: str, port: int, src: str, dest: str) -> None:
+    src_path = normalize_guest_path(src)
+    dest_path = normalize_guest_path(dest)
+    async with await get_ssh_connection(host, port) as conn:
+        result = await conn.run(f"mv {shlex.quote(src_path)} {shlex.quote(dest_path)}")
+        if result.exit_status != 0:
+            raise RuntimeError(result.stderr.strip() or f"rename failed: {src_path}")

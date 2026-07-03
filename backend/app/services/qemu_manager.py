@@ -24,6 +24,8 @@ class ConsoleBuffer:
         self.websockets = set()
         self.writer = None
         self.task = None
+        self.cols = 80
+        self.rows = 24
 
     def append_bytes(self, data: bytes):
         # 广播给当前连接的所有 WebSocket 客户端
@@ -73,6 +75,15 @@ class ConsoleBuffer:
             except Exception as e:
                 logger.debug(f"串口写入数据异常: {e}")
 
+    def write_resize(self, cols: int, rows: int) -> None:
+        """Record terminal dimensions for the web client only.
+
+        Do not inject ``stty`` into the guest serial line — OpenWrt/BusyBox
+        images often lack ``stty``, and QEMU serial is not a resize-aware TTY.
+        """
+        self.cols = max(1, min(int(cols), 500))
+        self.rows = max(1, min(int(rows), 500))
+
 
 console_managers: dict[str, ConsoleBuffer] = {}
 
@@ -95,6 +106,17 @@ def tap_name_for(instance_id: str) -> str:
 def serial_socket_path(instance_id: str) -> str:
     settings = get_settings()
     return str(Path(settings.QEMU_SERIAL_DIR) / f"qemu_serial_{instance_id}.sock")
+
+
+def block_device_arg(machine: str) -> str:
+    """ARM virt 使用 virtio-blk-device；malta / pc 等 PCI 机器使用 virtio-blk-pci。"""
+    if machine == "virt":
+        return "virtio-blk-device,drive=hd"
+    return "virtio-blk-pci,drive=hd"
+
+
+def net_device_arg(_machine: str) -> str:
+    return "virtio-net-pci,netdev=net0"
 
 
 def build_cmd(instance: Instance, template: Template) -> list[str]:
@@ -120,11 +142,11 @@ def build_cmd(instance: Instance, template: Template) -> list[str]:
         "-drive",
         f"if=none,file={drive},format=raw,id=hd",
         "-device",
-        "virtio-blk-device,drive=hd",
+        block_device_arg(template.machine),
         "-netdev",
         f"tap,id=net0,ifname={tap},script=no,downscript=no",
         "-device",
-        "virtio-net-pci,netdev=net0",
+        net_device_arg(template.machine),
         "-serial",
         f"unix:{serial},server,nowait",
     ]
@@ -219,27 +241,39 @@ def is_pid_alive(pid: int | None) -> bool:
         return True
 
 
-async def stop_process(pid: int | None) -> None:
+async def stop_process(pid: int | None, *, allow_sigkill: bool = True) -> bool:
+    """发送 SIGTERM 等待进程退出。返回是否已成功停止。"""
     if not pid:
-        return
+        return True
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
-        return
-    for _ in range(10):
+        return True
+    grace_sec = 30 if not allow_sigkill else 10
+    for _ in range(grace_sec):
         await asyncio.sleep(1)
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
-            return
+            return True
+    if not allow_sigkill:
+        logger.warning("QEMU pid=%s 在 %ss 内未优雅退出", pid, grace_sec)
+        return False
     try:
         os.kill(pid, signal.SIGKILL)
     except ProcessLookupError:
-        return
+        return True
+    await asyncio.sleep(0.5)
+    try:
+        os.kill(pid, 0)
+        return False
+    except ProcessLookupError:
+        return True
 
 
-async def cleanup_instance_resources(instance: Instance) -> None:
-    await stop_process(instance.pid)
+async def cleanup_instance_resources(instance: Instance, *, allow_sigkill: bool = True) -> None:
+    if instance.pid and not await stop_process(instance.pid, allow_sigkill=allow_sigkill):
+        raise RuntimeError("QEMU 未能在规定时间内优雅停止")
     await teardown_tap(instance.tap_name, instance.bridge_name)
     if instance.serial_socket and Path(instance.serial_socket).exists():
         Path(instance.serial_socket).unlink(missing_ok=True)

@@ -11,6 +11,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt update
 apt install -y \
   qemu-system-arm qemu-system-mips qemu-system-x86 qemu-utils \
+  e2fsprogs \
   bridge-utils uml-utilities libguestfs-tools iptables \
   redis-server \
   python3 python3-venv python3-pip \

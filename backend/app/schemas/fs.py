@@ -12,12 +12,14 @@ class FileEntry(BaseModel):
 class HostDirListing(BaseModel):
     current_path: str
     files: list[FileEntry]
+    host_root_path: str | None = None
 
 
 class GuestDirListing(BaseModel):
     instance_id: str
     current_path: str
     files: list[FileEntry]
+    mode: str | None = None
 
 
 class TransferRequest(BaseModel):
@@ -29,3 +31,21 @@ class TransferRequest(BaseModel):
 
 class TransferResponse(BaseModel):
     task_id: str
+
+
+class HostUploadResult(BaseModel):
+    path: str
+    name: str
+    size: int
+
+
+class GuestFsOpRequest(BaseModel):
+    op: str  # mkdir, delete, rename
+    path: str
+    dest_path: str | None = None
+
+
+class GuestFsOpResult(BaseModel):
+    op: str
+    path: str
+    dest_path: str | None = None

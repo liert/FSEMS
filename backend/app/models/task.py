@@ -14,6 +14,7 @@ class Task(Base):
     task_type: Mapped[str] = mapped_column(String(30), nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="PENDING")
     progress: Mapped[int] = mapped_column(Integer, default=0)
+    result_ref: Mapped[str | None] = mapped_column(String(50), nullable=True)
     error_msg: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime | None] = mapped_column(

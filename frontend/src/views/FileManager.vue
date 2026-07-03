@@ -37,10 +37,28 @@
                   </el-breadcrumb-item>
                   <el-breadcrumb-item v-for="(part, idx) in hostVisibleParts" :key="idx">
                     <span v-if="part.isEllipsis" class="ellipsis-node">...</span>
-                    <a v-else @click.prevent="navigateHostToIdx(part.originalIndex)">{{ part.name }}</a>
+                    <a
+                      v-else
+                      class="breadcrumb-link"
+                      :title="part.fullName"
+                      @click.prevent="navigateHostToIdx(part.originalIndex)"
+                    >{{ part.name }}</a>
                   </el-breadcrumb-item>
                 </el-breadcrumb>
               </div>
+            </div>
+            <div class="pane-actions">
+              <input
+                ref="hostUploadInputRef"
+                type="file"
+                multiple
+                hidden
+                @change="handleHostUploadPick"
+              />
+              <el-button size="small" :loading="hostUploading" @click="triggerHostUpload">
+                <el-icon><Upload /></el-icon>
+                上传
+              </el-button>
             </div>
           </div>
         </div>
@@ -93,12 +111,15 @@
         <div class="pane-header">
           <div class="pane-header-top">
             <div class="pane-title">
-              <span class="pulse-indicator guest-pulse" :class="{ 'offline': props.instanceStatus !== 'RUNNING' }"></span>
+              <span class="pulse-indicator guest-pulse" :class="{ 'offline': guestVfsMode === 'offline' }"></span>
               虚拟机 (Guest)
+              <el-tag v-if="guestVfsMode === 'offline'" size="small" type="info" effect="plain" class="mode-tag">
+                离线只读
+              </el-tag>
             </div>
             
-            <!-- 虚拟机智能地址栏 (仅在虚拟机运行时显示) -->
-            <div v-if="props.instanceStatus === 'RUNNING'" class="address-bar-container">
+            <!-- 访客机地址栏：运行中(在线)或已停止(离线) -->
+            <div v-if="isGuestBrowseable" class="address-bar-container">
               <!-- 编辑态：显示路径输入框 -->
               <el-input
                 v-if="guestEditingPath"
@@ -124,34 +145,35 @@
                   </el-breadcrumb-item>
                   <el-breadcrumb-item v-for="(part, idx) in guestVisibleParts" :key="idx">
                     <span v-if="part.isEllipsis" class="ellipsis-node">...</span>
-                    <a v-else @click.prevent="navigateGuestToIdx(part.originalIndex)">{{ part.name }}</a>
+                    <a
+                      v-else
+                      class="breadcrumb-link"
+                      :title="part.fullName"
+                      @click.prevent="navigateGuestToIdx(part.originalIndex)"
+                    >{{ part.name }}</a>
                   </el-breadcrumb-item>
                 </el-breadcrumb>
               </div>
             </div>
+            <div v-if="guestCanTransfer" class="pane-actions">
+              <el-button size="small" @click="createGuestFolder">
+                <el-icon><FolderAdd /></el-icon>
+                新建文件夹
+              </el-button>
+            </div>
           </div>
         </div>
 
-        <!-- 虚拟机未运行就绪时的占位符 -->
-        <div v-if="props.instanceStatus !== 'RUNNING'" class="placeholder-card glass-placeholder guest-offline-placeholder">
+        <!-- 启动/停止过渡态 -->
+        <div v-if="isGuestTransitioning" class="placeholder-card glass-placeholder guest-offline-placeholder">
           <el-icon class="placeholder-icon text-green"><FolderOpened /></el-icon>
-          <h3>虚拟机网络及 SSH 未就绪</h3>
-          <p class="desc-text">文件管理器需要虚拟机处于运行中且 SSH 服务正常响应。</p>
+          <h3>虚拟机状态切换中</h3>
+          <p class="desc-text">请等待虚拟机完成{{ props.instanceStatus === 'STARTING' ? '启动' : '停止' }}后再浏览文件系统。</p>
           <p>当前状态: <el-tag :type="vmStatusTagType" size="small">{{ vmStatusTextCn }}</el-tag></p>
-          <el-button 
-            type="success" 
-            size="large" 
-            class="glow-action-btn green-glow mini-btn" 
-            :disabled="props.instanceStatus === 'STARTING' || props.instanceStatus === 'STOPPING'"
-            @click="emit('start-instance')"
-            style="margin-top: 14px;"
-          >
-            {{ props.instanceStatus === 'STARTING' ? '虚拟机启动中，请稍候...' : '启动虚拟机' }}
-          </el-button>
         </div>
 
-        <!-- 虚拟机运行中时的文件列表 -->
-        <div v-else class="file-list-wrapper" v-loading="guestLoading" element-loading-background="rgba(20, 20, 25, 0.8)">
+        <!-- 在线 / 离线文件列表 -->
+        <div v-else-if="isGuestBrowseable" class="file-list-wrapper" v-loading="guestLoading" element-loading-background="rgba(20, 20, 25, 0.8)">
           <el-table
             ref="guestTableRef"
             :data="guestFiles"
@@ -160,7 +182,7 @@
             @current-change="handleGuestSelect"
             @row-contextmenu="handleGuestContextMenu"
             class="file-table"
-            empty-text="暂无文件或目录 (右键文件/文件夹可发起传输)"
+            :empty-text="guestEmptyText"
           >
             <el-table-column width="48">
               <template #default="{ row }">
@@ -191,52 +213,13 @@
               </template>
             </el-table-column>
           </el-table>
+          <div v-if="guestVfsMode === 'offline'" class="offline-hint">
+            离线模式：浏览 rootfs.img 磁盘内容。启动虚拟机前会自动卸载；传输需在线 SSH。
+            <el-button type="success" link @click="emit('start-instance')">启动虚拟机</el-button>
+          </div>
         </div>
       </div>
     </div>
-
-    <!-- 右下角悬浮传输进度条 -->
-    <Transition name="slide-fade">
-      <div v-if="showProgressWidget" class="transfer-progress-widget">
-        <div class="widget-header">
-          <div class="header-title-container">
-            <el-icon class="is-loading spin-icon" v-if="taskStatus === 'RUNNING' || taskStatus === 'PENDING'">
-              <Loading />
-            </el-icon>
-            <el-icon v-else-if="taskStatus === 'SUCCESS'" class="status-icon success-icon">
-              <CircleCheck />
-            </el-icon>
-            <el-icon v-else-if="taskStatus === 'FAILURE'" class="status-icon danger-icon">
-              <CircleClose />
-            </el-icon>
-            <span class="widget-title">文件传输进度 ({{ taskStatus }})</span>
-          </div>
-          <el-icon class="close-btn" @click="showProgressWidget = false"><CircleClose /></el-icon>
-        </div>
-        <div class="widget-body">
-          <div class="path-row">
-            <span class="path-label">源:</span>
-            <span class="path-value" :title="currentTaskDetails.src">{{ currentTaskDetails.src }}</span>
-          </div>
-          <div class="path-row">
-            <span class="path-label">目:</span>
-            <span class="path-value" :title="currentTaskDetails.dest">{{ currentTaskDetails.dest }}</span>
-          </div>
-          <div class="progress-row">
-            <el-progress
-              :percentage="taskProgress"
-              :status="progressUiStatus"
-              :stroke-width="8"
-              striped
-              striped-flow
-            />
-          </div>
-          <div v-if="taskErrorMsg" class="error-row">
-            <span class="error-text">{{ taskErrorMsg }}</span>
-          </div>
-        </div>
-      </div>
-    </Transition>
 
     <!-- 网页右键快捷上下文菜单 -->
     <div
@@ -248,6 +231,16 @@
         <el-icon><Upload /></el-icon>
         <span>传输</span>
       </div>
+      <template v-if="contextMenu.pane === 'guest' && guestCanTransfer">
+        <div class="menu-item" @click="handleContextMenuRename">
+          <el-icon><EditPen /></el-icon>
+          <span>重命名</span>
+        </div>
+        <div class="menu-item menu-item-danger" @click="handleContextMenuDelete">
+          <el-icon><Delete /></el-icon>
+          <span>删除</span>
+        </div>
+      </template>
     </div>
   </div>
 </template>
@@ -261,17 +254,19 @@ import {
   Document,
   DocumentCopy,
   Upload,
-  Loading,
-  CircleCheck,
-  CircleClose,
+  FolderAdd,
+  EditPen,
+  Delete,
 } from "@element-plus/icons-vue";
 import {
   fetchHostFiles,
   fetchGuestFiles,
   transferFile,
-  fetchTaskStatus,
+  uploadHostFile,
+  guestFsOp,
 } from "@/api/endpoints";
 import type { FileEntry } from "@/api/types";
+import { useTaskStore } from "@/stores/tasks";
 
 const props = defineProps<{
   instanceId: string;
@@ -281,6 +276,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: "start-instance"): void;
 }>();
+
+const taskStore = useTaskStore();
 
 const vmStatusTextCn = computed(() => {
   const statusMap: Record<string, string> = {
@@ -300,6 +297,28 @@ const vmStatusTagType = computed(() => {
   return "danger";
 });
 
+const guestVfsMode = computed(() => {
+  if (props.instanceStatus === "RUNNING") return "online";
+  if (props.instanceStatus === "STOPPED") return "offline";
+  return "unavailable";
+});
+
+const isGuestTransitioning = computed(() =>
+  props.instanceStatus === "STARTING" || props.instanceStatus === "STOPPING"
+);
+
+const isGuestBrowseable = computed(() =>
+  props.instanceStatus === "RUNNING" || props.instanceStatus === "STOPPED"
+);
+
+const guestCanTransfer = computed(() => props.instanceStatus === "RUNNING");
+
+const guestEmptyText = computed(() =>
+  guestVfsMode.value === "offline"
+    ? "暂无文件或目录 (离线只读，传输需启动虚拟机)"
+    : "暂无文件或目录 (右键文件/文件夹可发起传输)"
+);
+
 // 绑定根容器引用以精准计算右键绝对坐标
 const fileManagerRef = ref<HTMLElement | null>(null);
 
@@ -315,6 +334,9 @@ const selectedHostFile = ref<FileEntry | null>(null);
 const hostInputPath = ref("");
 const hostEditingPath = ref(false);
 const hostInputRef = ref<any>(null);
+const hostEffectiveRootPath = ref("");
+const hostUploadInputRef = ref<HTMLInputElement | null>(null);
+const hostUploading = ref(false);
 
 // 访客机文件系统数据与路径
 const guestCurrentPath = ref("/");
@@ -392,7 +414,7 @@ function handleGuestPathInput() {
   
   if (guestCurrentPath.value !== val) {
     guestCurrentPath.value = val;
-    loadGuestFiles();
+    loadGuestFilesList();
   }
 }
 
@@ -422,6 +444,9 @@ function handleHostContextMenu(row: FileEntry, column: any, event: MouseEvent) {
 
 // 右键事件响应：虚拟机
 function handleGuestContextMenu(row: FileEntry, column: any, event: MouseEvent) {
+  if (!guestCanTransfer.value) {
+    return;
+  }
   event.preventDefault();
   event.stopPropagation();
   selectedGuestFile.value = row;
@@ -448,8 +473,13 @@ function handleGuestContextMenu(row: FileEntry, column: any, event: MouseEvent) 
 function handleContextMenuTransfer() {
   const menu = contextMenu.value;
   if (!menu.row) return;
-  
+
   if (menu.pane === "host") {
+    if (!guestCanTransfer.value) {
+      ElMessage.warning("虚拟机未运行，无法传输到访客机");
+      closeContextMenu();
+      return;
+    }
     initiateTransfer("host_to_guest", menu.row);
   } else if (menu.pane === "guest") {
     initiateTransfer("guest_to_host", menu.row);
@@ -458,16 +488,79 @@ function handleContextMenuTransfer() {
   closeContextMenu();
 }
 
+async function createGuestFolder() {
+  if (!guestCanTransfer.value) return;
+  try {
+    const { value } = await ElMessageBox.prompt("输入新文件夹名称", "新建文件夹", {
+      confirmButtonText: "创建",
+      cancelButtonText: "取消",
+      inputPattern: /^[^/\\]+$/,
+      inputErrorMessage: "名称不能包含路径分隔符",
+    });
+    const name = value.trim();
+    if (!name) return;
+    const target = guestCurrentPath.value.endsWith("/")
+      ? `${guestCurrentPath.value}${name}`
+      : `${guestCurrentPath.value}/${name}`;
+    await guestFsOp(props.instanceId, "mkdir", target);
+    ElMessage.success("文件夹已创建");
+    await loadGuestFilesList();
+  } catch (error: unknown) {
+    if (error !== "cancel" && (error as Error)?.message !== "cancel") {
+      ElMessage.error(error instanceof Error ? error.message : "创建失败");
+    }
+  }
+}
+
+async function handleContextMenuRename() {
+  const menu = contextMenu.value;
+  if (!menu.row || menu.pane !== "guest" || !guestCanTransfer.value) return;
+  closeContextMenu();
+  try {
+    const { value } = await ElMessageBox.prompt("输入新名称", "重命名", {
+      confirmButtonText: "确定",
+      cancelButtonText: "取消",
+      inputValue: menu.row.name,
+      inputPattern: /^[^/\\]+$/,
+      inputErrorMessage: "名称不能包含路径分隔符",
+    });
+    const newName = value.trim();
+    if (!newName || newName === menu.row.name) return;
+    const parent = guestCurrentPath.value.replace(/\/$/, "") || "";
+    const dest = parent === "" || parent === "/" ? `/${newName}` : `${parent}/${newName}`;
+    await guestFsOp(props.instanceId, "rename", menu.row.path, dest);
+    ElMessage.success("重命名成功");
+    await loadGuestFilesList();
+  } catch (error: unknown) {
+    if (error !== "cancel" && (error as Error)?.message !== "cancel") {
+      ElMessage.error(error instanceof Error ? error.message : "重命名失败");
+    }
+  }
+}
+
+async function handleContextMenuDelete() {
+  const menu = contextMenu.value;
+  if (!menu.row || menu.pane !== "guest" || !guestCanTransfer.value) return;
+  closeContextMenu();
+  try {
+    await ElMessageBox.confirm(
+      `确定删除「${menu.row.name}」？此操作不可撤销。`,
+      "删除确认",
+      { type: "warning", confirmButtonText: "删除" }
+    );
+    await guestFsOp(props.instanceId, "delete", menu.row.path);
+    ElMessage.success("已删除");
+    await loadGuestFilesList();
+  } catch (error: unknown) {
+    if (error !== "cancel" && (error as Error)?.message !== "cancel") {
+      ElMessage.error(error instanceof Error ? error.message : "删除失败");
+    }
+  }
+}
+
 function closeContextMenu() {
   contextMenu.value.visible = false;
 }
-
-// 传输进度控制
-const showProgressWidget = ref(false);
-const taskProgress = ref(0);
-const taskStatus = ref("PENDING");
-const taskErrorMsg = ref<string | null>(null);
-const currentTaskDetails = ref({ src: "", dest: "" });
 
 // 计算面包屑导航部分
 const hostPathParts = ref<string[]>([]);
@@ -485,33 +578,69 @@ watch(guestCurrentPath, (newVal) => {
 
 interface VisiblePart {
   name: string;
+  fullName: string;
   originalIndex: number;
   isEllipsis: boolean;
+}
+
+function formatSegmentLabel(name: string): string {
+  if (name.startsWith("inst_") && name.length > 22) {
+    return `inst_${name.slice(5, 13)}…${name.slice(-4)}`;
+  }
+  if (name.length > 24) {
+    return `${name.slice(0, 20)}…`;
+  }
+  return name;
 }
 
 function getVisibleParts(parts: string[]): VisiblePart[] {
   const maxVisible = 4; // 最多显示 4 个节点（不计 root 根节点）
   if (parts.length <= maxVisible) {
     return parts.map((name, index) => ({
-      name,
+      name: formatSegmentLabel(name),
+      fullName: name,
       originalIndex: index,
-      isEllipsis: false
+      isEllipsis: false,
     }));
   }
-  
+
   // 节点过多，收缩中间部分
+  const first = parts[0];
+  const tail = parts.slice(parts.length - 2);
   return [
-    { name: parts[0], originalIndex: 0, isEllipsis: false },
-    { name: "...", originalIndex: -1, isEllipsis: true },
-    ...parts.slice(parts.length - 2).map((name, index) => ({
-      name,
+    { name: formatSegmentLabel(first), fullName: first, originalIndex: 0, isEllipsis: false },
+    { name: "...", fullName: "...", originalIndex: -1, isEllipsis: true },
+    ...tail.map((name, index) => ({
+      name: formatSegmentLabel(name),
+      fullName: name,
       originalIndex: parts.length - 2 + index,
-      isEllipsis: false
-    }))
+      isEllipsis: false,
+    })),
   ];
 }
 
-const hostVisibleParts = computed(() => getVisibleParts(hostPathParts.value));
+// 宿主机路径在实例上下文中只展示有效根目录下的相对路径
+function countPathPrefixSegments(fullPath: string, rootPath: string): number {
+  const normalize = (value: string) => value.replace(/\/+$/, "") || "/";
+  const full = normalize(fullPath);
+  const root = normalize(rootPath);
+  if (root === "/") return 0;
+  if (full === root) return root.split("/").filter(Boolean).length;
+  if (full.startsWith(`${root}/`)) return root.split("/").filter(Boolean).length;
+  return 0;
+}
+
+const hostInstancePrefixLength = computed(() => {
+  if (!hostEffectiveRootPath.value) return 0;
+  return countPathPrefixSegments(hostRelativePath.value, hostEffectiveRootPath.value);
+});
+
+const hostDisplayParts = computed(() => {
+  const prefixLen = hostInstancePrefixLength.value;
+  return hostPathParts.value.slice(prefixLen);
+});
+
+const hostVisibleParts = computed(() => getVisibleParts(hostDisplayParts.value));
 const guestVisibleParts = computed(() => getVisibleParts(guestPathParts.value));
 
 // 加载宿主机文件列表
@@ -521,7 +650,9 @@ async function loadHostFiles() {
   try {
     const data = await fetchHostFiles(hostRelativePath.value, props.instanceId);
     hostFiles.value = data.files;
-    // 自动更新宿主机当前真实绝对路径
+    if (data.host_root_path) {
+      hostEffectiveRootPath.value = data.host_root_path;
+    }
     hostRelativePath.value = data.current_path;
   } catch (error: any) {
     ElMessage.error(`加载宿主机文件失败: ${error.message || error}`);
@@ -530,16 +661,17 @@ async function loadHostFiles() {
   }
 }
 
-// 加载访客机文件列表
-async function loadGuestFiles() {
-  if (props.instanceStatus !== "RUNNING") {
+// 加载访客机文件列表（运行中=在线 SSH，已停止=离线 guestmount）
+async function loadGuestFilesList() {
+  if (!isGuestBrowseable.value) {
     guestFiles.value = [];
     return;
   }
   guestLoading.value = true;
   selectedGuestFile.value = null;
+  const mode = guestVfsMode.value === "offline" ? "offline" : "online";
   try {
-    const data = await fetchGuestFiles(props.instanceId, guestCurrentPath.value);
+    const data = await fetchGuestFiles(props.instanceId, guestCurrentPath.value, mode);
     guestFiles.value = data.files;
   } catch (error: any) {
     ElMessage.error(`加载虚拟机文件失败: ${error.message || error}`);
@@ -548,10 +680,10 @@ async function loadGuestFiles() {
   }
 }
 
-// 监听实例状态改变以加载或清除虚机文件列表
-watch(() => props.instanceStatus, (newVal) => {
-  if (newVal === "RUNNING") {
-    loadGuestFiles();
+// 监听实例状态改变以切换在线/离线浏览
+watch(() => props.instanceStatus, () => {
+  if (isGuestBrowseable.value) {
+    loadGuestFilesList();
   } else {
     guestFiles.value = [];
   }
@@ -570,13 +702,18 @@ function enterHostDir(dirName: string) {
 
 // 宿主机面包屑跳转
 function navigateHost(path: string) {
-  hostRelativePath.value = path;
+  if (path === "/") {
+    hostRelativePath.value = hostEffectiveRootPath.value || "";
+  } else {
+    hostRelativePath.value = path;
+  }
   loadHostFiles();
 }
 
-function navigateHostToIdx(idx: number) {
-  const parts = hostPathParts.value.slice(0, idx + 1);
-  hostRelativePath.value = "/" + parts.join("/");
+function navigateHostToIdx(displayIdx: number) {
+  const prefixLen = hostInstancePrefixLength.value;
+  const parts = hostPathParts.value.slice(0, prefixLen + displayIdx + 1);
+  hostRelativePath.value = parts.length ? `/${parts.join("/")}` : "";
   loadHostFiles();
 }
 
@@ -587,19 +724,19 @@ function enterGuestDir(dirName: string) {
   } else {
     guestCurrentPath.value += `/${dirName}`;
   }
-  loadGuestFiles();
+  loadGuestFilesList();
 }
 
 // 访客机面包屑跳转
 function navigateGuest(path: string) {
   guestCurrentPath.value = path;
-  loadGuestFiles();
+  loadGuestFilesList();
 }
 
 function navigateGuestToIdx(idx: number) {
   const parts = guestPathParts.value.slice(0, idx + 1);
   guestCurrentPath.value = "/" + parts.join("/");
-  loadGuestFiles();
+  loadGuestFilesList();
 }
 
 // 选择文件处理
@@ -627,22 +764,52 @@ function formatTime(timestamp: number) {
   return date.toLocaleString("zh-CN", { hour12: false });
 }
 
-// 传输进度 UI 状态计算
-const progressUiStatus = computed(() => {
-  if (taskStatus.value === "SUCCESS") return "success";
-  if (taskStatus.value === "FAILURE") return "exception";
-  return "";
-});
+function triggerHostUpload() {
+  hostUploadInputRef.value?.click();
+}
 
-const statusTagType = computed(() => {
-  if (taskStatus.value === "SUCCESS") return "success";
-  if (taskStatus.value === "FAILURE") return "danger";
-  if (taskStatus.value === "RUNNING") return "warning";
-  return "info";
-});
+async function handleHostUploadPick(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const files = input.files ? Array.from(input.files) : [];
+  input.value = "";
+  if (!files.length) return;
+
+  hostUploading.value = true;
+  let uploaded = 0;
+  try {
+    for (const file of files) {
+      const exists = hostFiles.value.some((f) => f.name === file.name && !f.is_dir);
+      if (exists) {
+        try {
+          await ElMessageBox.confirm(
+            `当前目录已存在 "${file.name}"，是否覆盖？`,
+            "覆盖确认",
+            { confirmButtonText: "覆盖", cancelButtonText: "跳过", type: "warning" }
+          );
+        } catch {
+          continue;
+        }
+      }
+      await uploadHostFile(file, hostRelativePath.value, props.instanceId);
+      uploaded += 1;
+    }
+    if (uploaded > 0) {
+      ElMessage.success(`已上传 ${uploaded} 个文件`);
+      await loadHostFiles();
+    }
+  } catch (error: unknown) {
+    ElMessage.error(error instanceof Error ? error.message : "上传失败");
+  } finally {
+    hostUploading.value = false;
+  }
+}
 
 // 发起文件/目录传输
 async function initiateTransfer(direction: "host_to_guest" | "guest_to_host", file: FileEntry) {
+  if (!guestCanTransfer.value) {
+    ElMessage.warning("文件传输需要虚拟机处于运行中");
+    return;
+  }
   const fileName = file.name;
   let src = file.path;
   let dest = "";
@@ -681,74 +848,37 @@ async function initiateTransfer(direction: "host_to_guest" | "guest_to_host", fi
     }
   }
 
-  currentTaskDetails.value = { src, dest };
-  taskStatus.value = "PENDING";
-  taskProgress.value = 0;
-  taskErrorMsg.value = null;
-  showProgressWidget.value = true;
+  const directionLabel = direction === "host_to_guest" ? "宿主机 → 访客机" : "访客机 → 宿主机";
 
   try {
     const taskData = await transferFile(props.instanceId, direction, src, dest);
-    pollTaskStatus(taskData.task_id);
-  } catch (error: any) {
-    taskStatus.value = "FAILURE";
-    taskErrorMsg.value = error.message || error;
-    setTimeout(() => {
-      showProgressWidget.value = false;
-    }, 6000);
-  }
-}
-
-// 轮询任务进度
-function pollTaskStatus(taskId: string) {
-  let timer: any = null;
-  const checkStatus = async () => {
-    try {
-      const data = await fetchTaskStatus(taskId);
-      taskStatus.value = data.status;
-      taskProgress.value = data.progress;
-      taskErrorMsg.value = data.error_msg;
-
-      if (data.status === "SUCCESS") {
-        if (timer) clearInterval(timer);
-        ElMessage.success("传输成功！");
+    taskStore.trackTask(taskData.task_id, {
+      label: "文件传输",
+      detail: `${directionLabel}: ${fileName}`,
+      taskType: "FILE_TRANSFER",
+      successMessage: "传输成功",
+      onSuccess: () => {
         loadHostFiles();
-        loadGuestFiles();
-        setTimeout(() => {
-          showProgressWidget.value = false;
-        }, 2500);
-      } else if (data.status === "FAILURE") {
-        if (timer) clearInterval(timer);
-        ElMessage.error(`传输失败: ${data.error_msg}`);
-        setTimeout(() => {
-          showProgressWidget.value = false;
-        }, 6000);
-      }
-    } catch (error: any) {
-      if (timer) clearInterval(timer);
-      taskStatus.value = "FAILURE";
-      taskErrorMsg.value = error.message || error;
-      setTimeout(() => {
-        showProgressWidget.value = false;
-      }, 6000);
-    }
-  };
-
-  checkStatus();
-  timer = setInterval(checkStatus, 800);
+        loadGuestFilesList();
+      },
+    });
+  } catch (error: unknown) {
+    ElMessage.error(error instanceof Error ? error.message : "传输任务提交失败");
+  }
 }
 
 // 监听实例 ID 变更，重新加载文件列表
 watch(() => props.instanceId, () => {
   hostRelativePath.value = "";
+  hostEffectiveRootPath.value = "";
   guestCurrentPath.value = "/";
   loadHostFiles();
-  loadGuestFiles();
+  loadGuestFilesList();
 });
 
 onMounted(() => {
   loadHostFiles();
-  loadGuestFiles();
+  loadGuestFilesList();
   
   // 注册全局事件以便关闭上下文菜单
   window.addEventListener("click", closeContextMenu);
@@ -792,21 +922,21 @@ onBeforeUnmount(() => {
 }
 
 .glass-card {
-  background: rgba(23, 23, 37, 0.45);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--fsems-bg-elevated);
+  border: 1px solid var(--fsems-border);
   backdrop-filter: blur(16px);
-  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+  box-shadow: var(--fsems-shadow);
   transition: border-color 0.3s ease;
 }
 
 .glass-card:hover {
-  border-color: rgba(56, 189, 248, 0.25);
+  border-color: color-mix(in srgb, var(--fsems-accent) 35%, var(--fsems-border));
 }
 
 .pane-header {
   padding: 14px 20px;
-  background: rgba(255, 255, 255, 0.02);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--fsems-bg-card);
+  border-bottom: 1px solid var(--fsems-border);
 }
 
 .pane-title {
@@ -816,6 +946,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
+  color: var(--fsems-text);
 }
 
 .pulse-indicator {
@@ -852,23 +983,23 @@ onBeforeUnmount(() => {
 .file-table {
   --el-table-bg-color: transparent;
   --el-table-tr-bg-color: transparent;
-  --el-table-header-bg-color: rgba(255, 255, 255, 0.02);
-  --el-table-row-hover-bg-color: rgba(255, 255, 255, 0.04);
-  --el-table-border-color: rgba(255, 255, 255, 0.04);
-  --el-table-text-color: #e2e8f0;
-  --el-table-header-text-color: #94a3b8;
+  --el-table-header-bg-color: var(--fsems-bg-card);
+  --el-table-row-hover-bg-color: color-mix(in srgb, var(--fsems-accent) 8%, transparent);
+  --el-table-border-color: var(--fsems-border);
+  --el-table-text-color: var(--fsems-text);
+  --el-table-header-text-color: var(--fsems-text);
   border-radius: 8px;
 }
 
 .clickable-name {
   cursor: pointer;
-  color: #38bdf8;
+  color: var(--fsems-accent);
   font-weight: 500;
   transition: color 0.2s ease;
 }
 
 .clickable-name:hover {
-  color: #7dd3fc;
+  color: color-mix(in srgb, var(--fsems-accent) 80%, white);
   text-decoration: underline;
 }
 
@@ -892,14 +1023,14 @@ onBeforeUnmount(() => {
 
 /* 进度对话框 */
 :deep(.custom-progress-dialog) {
-  background: rgba(20, 20, 30, 0.85);
+  background: var(--fsems-bg-elevated);
   backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--fsems-border);
   border-radius: 16px;
 }
 
 :deep(.custom-progress-dialog .el-dialog__title) {
-  color: #f1f5f9;
+  color: var(--fsems-text);
   font-weight: 600;
 }
 
@@ -907,7 +1038,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  color: #cbd5e1;
+  color: var(--fsems-text-muted);
 }
 
 .progress-message p {
@@ -942,11 +1073,14 @@ onBeforeUnmount(() => {
   gap: 16px;
 }
 
+.pane-actions {
+  flex-shrink: 0;
+}
+
 /* 智能地址栏统一容器 */
 .address-bar-container {
   flex: 1;
   min-width: 0;
-  max-width: 380px;
 }
 
 /* 面包屑导航的默认状态模拟输入框框体 */
@@ -956,42 +1090,64 @@ onBeforeUnmount(() => {
   gap: 8px;
   height: 32px;
   padding: 0 12px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--fsems-bg-card);
+  border: 1px solid var(--fsems-border);
   border-radius: 8px;
-  cursor: text; /* 模拟可编辑的光标样式 */
+  cursor: text;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   overflow: hidden;
   box-sizing: border-box;
 }
 
 .address-breadcrumbs:hover {
-  border-color: rgba(56, 189, 248, 0.45);
-  background: rgba(255, 255, 255, 0.06);
+  border-color: color-mix(in srgb, var(--fsems-accent) 45%, var(--fsems-border));
+  background: var(--fsems-bg-elevated);
 }
 
 .folder-prefix {
-  color: #64748b;
+  color: var(--fsems-text-dim);
   font-size: 0.95rem;
   flex-shrink: 0;
 }
 
 /* 面包屑内的链接样式 */
 :deep(.el-breadcrumb) {
-  display: inline-flex;
+  display: flex;
+  flex-wrap: nowrap;
   align-items: center;
+  min-width: 0;
+  overflow: hidden;
   font-size: 0.85rem;
 }
 
+:deep(.el-breadcrumb__item) {
+  float: none;
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 140px;
+}
+
+:deep(.el-breadcrumb__item .el-breadcrumb__inner) {
+  display: inline-flex;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.breadcrumb-link,
 :deep(.el-breadcrumb__item) a {
-  color: #94a3b8 !important;
+  color: var(--fsems-text-muted) !important;
   cursor: pointer;
   font-weight: 500;
   transition: color 0.2s ease;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+  max-width: 100%;
 }
 
 .ellipsis-node {
-  color: #64748b;
+  color: var(--fsems-text-dim);
   cursor: default;
   user-select: none;
   font-weight: bold;
@@ -999,7 +1155,7 @@ onBeforeUnmount(() => {
 }
 
 :deep(.el-breadcrumb__item) a:hover {
-  color: #38bdf8 !important;
+  color: var(--fsems-accent) !important;
 }
 
 /* 地址编辑状态的输入框美化 */
@@ -1010,13 +1166,13 @@ onBeforeUnmount(() => {
 :deep(.address-input .el-input__wrapper) {
   height: 32px;
   box-sizing: border-box;
-  background-color: rgba(255, 255, 255, 0.03) !important;
-  border: 1px solid rgba(56, 189, 248, 0.75) !important;
-  box-shadow: 0 0 10px rgba(56, 189, 248, 0.3) !important;
+  background-color: var(--fsems-bg-elevated) !important;
+  border: 1px solid color-mix(in srgb, var(--fsems-accent) 55%, var(--fsems-border)) !important;
+  box-shadow: none !important;
 }
 
 :deep(.address-input .el-input__inner) {
-  color: #cbd5e1 !important;
+  color: var(--fsems-text) !important;
   font-size: 0.85rem;
 }
 
@@ -1025,10 +1181,10 @@ onBeforeUnmount(() => {
   position: absolute;
   z-index: 10000;
   min-width: 120px;
-  background: rgba(23, 23, 37, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--fsems-bg-elevated);
+  border: 1px solid var(--fsems-border);
   border-radius: 8px;
-  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--fsems-shadow);
   padding: 4px 0;
   backdrop-filter: blur(12px);
 }
@@ -1039,17 +1195,21 @@ onBeforeUnmount(() => {
   gap: 8px;
   padding: 8px 16px;
   font-size: 0.9rem;
-  color: #cbd5e1;
+  color: var(--fsems-text);
   cursor: pointer;
   transition: all 0.2s ease;
 }
 
 .menu-item:hover {
-  background: rgba(56, 189, 248, 0.18);
-  color: #38bdf8;
+  background: color-mix(in srgb, var(--fsems-accent) 12%, transparent);
+  color: var(--fsems-accent);
 }
 
-/* 虚拟机未启动占位符样式 */
+.menu-item-danger:hover {
+  background: color-mix(in srgb, var(--fsems-danger) 12%, transparent);
+  color: var(--fsems-danger);
+}
+
 .guest-offline-placeholder {
   flex: 1;
   display: flex;
@@ -1057,8 +1217,8 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   padding: 40px 20px;
-  background: rgba(255, 255, 255, 0.01) !important;
-  border: 1.5px dashed rgba(255, 255, 255, 0.06);
+  background: var(--fsems-bg-card) !important;
+  border: 1.5px dashed var(--fsems-border);
   border-radius: 12px;
   margin: 20px;
   text-align: center;
@@ -1071,19 +1231,18 @@ onBeforeUnmount(() => {
 }
 
 .text-green {
-  color: #10b981;
-  filter: drop-shadow(0 0 10px rgba(16, 185, 129, 0.3));
+  color: var(--fsems-success);
 }
 
 .guest-offline-placeholder h3 {
   font-size: 1.15rem;
   margin: 0 0 10px 0;
-  color: #f1f5f9;
+  color: var(--fsems-text);
 }
 
 .guest-offline-placeholder p {
   font-size: 0.85rem;
-  color: #94a3b8;
+  color: var(--fsems-text-dim);
   margin: 4px 0;
 }
 
@@ -1091,6 +1250,20 @@ onBeforeUnmount(() => {
   max-width: 320px;
   margin-bottom: 12px;
   line-height: 1.5;
+}
+
+.mode-tag {
+  margin-left: 8px;
+  vertical-align: middle;
+}
+
+.offline-hint {
+  flex-shrink: 0;
+  padding: 8px 12px;
+  font-size: 0.82rem;
+  color: var(--fsems-text-dim);
+  border-top: 1px solid var(--fsems-border);
+  background: color-mix(in srgb, var(--fsems-success) 8%, transparent);
 }
 
 .glow-action-btn {
@@ -1111,138 +1284,8 @@ onBeforeUnmount(() => {
 }
 
 .pulse-indicator.offline {
-  background-color: #64748b !important;
+  background-color: var(--fsems-text-dim) !important;
   box-shadow: none !important;
   animation: none !important;
-}
-
-/* 右下角悬浮传输进度条样式 */
-.transfer-progress-widget {
-  position: fixed;
-  bottom: 24px;
-  right: 24px;
-  width: 340px;
-  background: rgba(15, 23, 42, 0.95);
-  border: 1px solid rgba(56, 189, 248, 0.25);
-  border-radius: 12px;
-  padding: 16px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(12px);
-  z-index: 2100;
-  color: #f1f5f9;
-  font-family: inherit;
-  box-sizing: border-box;
-}
-
-.widget-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  padding-bottom: 8px;
-}
-
-.header-title-container {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.spin-icon {
-  font-size: 1.1rem;
-  color: #38bdf8;
-}
-
-.status-icon {
-  font-size: 1.1rem;
-}
-
-.success-icon {
-  color: #10b981;
-}
-
-.danger-icon {
-  color: #ef4444;
-}
-
-.widget-title {
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: #f8fafc;
-}
-
-.close-btn {
-  font-size: 1.1rem;
-  color: #94a3b8;
-  cursor: pointer;
-  transition: color 0.2s ease;
-}
-
-.close-btn:hover {
-  color: #ef4444;
-}
-
-.widget-body {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.path-row {
-  display: flex;
-  font-size: 0.8rem;
-  line-height: 1.4;
-  align-items: flex-start;
-}
-
-.path-label {
-  color: #94a3b8;
-  width: 24px;
-  font-weight: 600;
-}
-
-.path-value {
-  color: #cbd5e1;
-  word-break: break-all;
-  flex: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.progress-row {
-  margin-top: 8px;
-}
-
-.error-row {
-  margin-top: 4px;
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid rgba(239, 68, 68, 0.2);
-  border-radius: 6px;
-  padding: 8px 10px;
-}
-
-.error-text {
-  font-size: 0.75rem;
-  color: #fca5a5;
-  word-break: break-all;
-  display: block;
-}
-
-/* 进场和出场动画 */
-.slide-fade-enter-active,
-.slide-fade-leave-active {
-  transition: all 0.3s ease-out;
-}
-
-.slide-fade-enter-from {
-  transform: translateX(100px);
-  opacity: 0;
-}
-
-.slide-fade-leave-to {
-  transform: translateY(20px);
-  opacity: 0;
 }
 </style>

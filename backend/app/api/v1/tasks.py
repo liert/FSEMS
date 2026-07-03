@@ -30,9 +30,11 @@ async def get_task_status(
     return ApiResponse(
         data=TaskStatusOut(
             task_id=task.id,
+            task_type=task.task_type,
             status=task.status,
             progress=task.progress,
-            error_msg=task.error_msg
+            result_ref=task.result_ref,
+            error_msg=task.error_msg,
         ),
         message="Task status queried",
     )

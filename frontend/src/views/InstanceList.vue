@@ -1,78 +1,202 @@
 <template>
-  <div class="page">
-    <header class="header">
-      <h1>实例管理</h1>
-      <div>
-        <el-button type="primary" @click="showCreate = true">新建实例</el-button>
-        <el-button type="success" @click="goToLogs">系统日志</el-button>
-        <el-button @click="logout">退出</el-button>
+  <div class="page-stack">
+    <PageHeader
+      title="实例管理"
+      description="创建、启动与管理 QEMU 固件实例。Phase 1 同时仅允许一个运行中的实例。"
+    >
+      <template #actions>
+        <el-input
+          v-model="searchQuery"
+          placeholder="搜索名称或 ID…"
+          clearable
+          style="width: 220px"
+          :prefix-icon="Search"
+        />
+        <el-button type="primary" @click="showCreate = true">
+          <el-icon><Plus /></el-icon>
+          新建实例
+        </el-button>
+      </template>
+    </PageHeader>
+
+    <section class="glass-card instance-panel">
+      <div class="stats-grid stats-in-panel">
+        <div class="stat-card">
+          <div class="stat-label">实例总数</div>
+          <div class="stat-value accent">{{ instances.length }}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">运行中</div>
+          <div class="stat-value success">{{ runningCount }}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">已停止</div>
+          <div class="stat-value muted">{{ stoppedCount }}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">过渡状态</div>
+          <div class="stat-value">{{ transitionalCount }}</div>
+        </div>
       </div>
-    </header>
 
-    <el-table :data="instances" v-loading="loading" stripe>
-      <el-table-column prop="name" label="名称" />
-      <el-table-column prop="id" label="ID" min-width="280" />
-      <el-table-column prop="status" label="状态" width="120">
-        <template #default="{ row }">
-          <el-tag :type="statusType(row.status)">{{ statusText(row.status) }}</el-tag>
+      <div class="table-panel content-panel table-section">
+        <el-table
+          :data="filteredInstances"
+          v-loading="loading"
+          empty-text=" "
+          style="width: 100%"
+        >
+        <template #empty>
+          <EmptyState
+            title="还没有实例"
+            description="创建第一个 QEMU 固件实例，开始串口调试与文件传输实验。"
+          >
+            <template #action>
+              <el-button type="primary" @click="showCreate = true">新建实例</el-button>
+            </template>
+          </EmptyState>
         </template>
-      </el-table-column>
-      <el-table-column prop="guest_ssh_host" label="SSH 地址" width="140" />
-      <el-table-column label="操作" width="360">
-        <template #default="{ row }">
-          <el-button size="small" :disabled="row.status === 'RUNNING' || row.status === 'STARTING' || row.status === 'STOPPING'" @click="doAction(row.id, 'start')">
-            启动
-          </el-button>
-          <el-button size="small" :disabled="row.status === 'STOPPED' || row.status === 'STOPPING'" @click="doAction(row.id, 'stop')">
-            停止
-          </el-button>
-          <el-button size="small" @click="doAction(row.id, 'reset')">重置</el-button>
-          <el-button size="small" type="primary" @click="manageInstance(row.id)">
-            管理
-          </el-button>
-          <el-button size="small" type="danger" :disabled="row.status === 'RUNNING' || row.status === 'STARTING' || row.status === 'STOPPING'" @click="deleteInst(row.id)">
-            删除
-          </el-button>
-        </template>
-      </el-table-column>
-    </el-table>
 
-    <el-dialog v-model="showCreate" title="新建实例" width="500px" :before-close="cancelCreate">
-      <el-form label-width="120px">
-        <el-form-item label="名称">
-          <el-input v-model="newName" placeholder="输入实例名称" />
+        <el-table-column prop="name" label="名称" min-width="160">
+          <template #default="{ row }">
+            <div class="name-cell">
+              <span class="name-text">{{ row.name }}</span>
+              <span class="name-sub mono-cell">{{ shortInstanceId(row.id) }}</span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column prop="status" label="状态" width="130">
+          <template #default="{ row }">
+            <StatusBadge :status="row.status" />
+          </template>
+        </el-table-column>
+        <el-table-column prop="guest_ssh_host" label="SSH 地址" width="150">
+          <template #default="{ row }">
+            <span class="mono-cell">{{ row.guest_ssh_host || "—" }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="240" fixed="right">
+          <template #default="{ row }">
+            <div class="row-actions">
+              <div class="lifecycle-icons">
+                <el-tooltip content="启动" placement="top">
+                  <span class="icon-btn-wrap">
+                    <el-button
+                      type="primary"
+                      text
+                      size="small"
+                      class="lifecycle-icon-btn"
+                      :disabled="row.status === 'RUNNING' || row.status === 'STARTING' || row.status === 'STOPPING'"
+                      @click="doAction(row.id, 'start')"
+                    >
+                      <el-icon><VideoPlay /></el-icon>
+                    </el-button>
+                  </span>
+                </el-tooltip>
+                <el-tooltip content="停止" placement="top">
+                  <span class="icon-btn-wrap">
+                    <el-button
+                      type="danger"
+                      text
+                      size="small"
+                      class="lifecycle-icon-btn"
+                      :disabled="row.status === 'STOPPED' || row.status === 'STOPPING'"
+                      @click="doAction(row.id, 'stop')"
+                    >
+                      <el-icon><SwitchButton /></el-icon>
+                    </el-button>
+                  </span>
+                </el-tooltip>
+                <el-tooltip content="重启" placement="top">
+                  <span class="icon-btn-wrap">
+                    <el-button
+                      type="warning"
+                      text
+                      size="small"
+                      class="lifecycle-icon-btn"
+                      @click="doAction(row.id, 'reset')"
+                    >
+                      <el-icon><RefreshRight /></el-icon>
+                    </el-button>
+                  </span>
+                </el-tooltip>
+                <el-tooltip content="删除" placement="top">
+                  <span class="icon-btn-wrap">
+                    <el-button
+                      type="danger"
+                      text
+                      size="small"
+                      class="lifecycle-icon-btn"
+                      :disabled="row.status === 'RUNNING' || row.status === 'STARTING' || row.status === 'STOPPING'"
+                      @click="deleteInst(row.id)"
+                    >
+                      <el-icon><Delete /></el-icon>
+                    </el-button>
+                  </span>
+                </el-tooltip>
+              </div>
+              <el-button size="small" type="primary" plain @click="manageInstance(row.id)">
+                进入管理
+              </el-button>
+            </div>
+          </template>
+        </el-table-column>
+      </el-table>
+      </div>
+    </section>
+
+    <el-dialog v-model="showCreate" title="新建实例" width="520px" :before-close="cancelCreate">
+      <el-form label-width="120px" label-position="left">
+        <el-form-item label="名称" required>
+          <el-input v-model="newName" placeholder="例如：OpenWrt 实验环境" />
         </el-form-item>
-        <el-form-item label="模板">
+        <el-form-item label="固件模板" required>
           <el-select v-model="newTemplateId" style="width: 100%">
-            <el-option v-for="t in templates" :key="t.id" :label="t.name" :value="t.id" />
+            <el-option
+              v-for="t in templates"
+              :key="t.id"
+              :label="`${t.name} (${t.arch})`"
+              :value="t.id"
+            />
           </el-select>
         </el-form-item>
-        <!-- 自动根据所选启动模板设置对应版本的默认内核与文件系统。若需模拟特定固件，可在下方指定自定义 RootFS -->
-        <el-form-item label="自定义RootFS (可选)">
-          <el-input v-model="newRootfsPath" placeholder="可选输入宿主机上的压缩包或文件夹路径作为自定义系统" />
+        <el-form-item label="自定义 RootFS">
+          <el-input
+            v-model="newRootfsPath"
+            placeholder="可选：宿主机上的压缩包或目录路径"
+          />
+          <div class="field-hint">留空则使用模板默认 rootfs 镜像</div>
         </el-form-item>
         <el-form-item label="网络模式">
           <el-radio-group v-model="newNetworkType">
             <el-radio label="same">同一局域网</el-radio>
             <el-radio label="different">独立局域网</el-radio>
           </el-radio-group>
-          <div style="font-size: 12px; color: #909399; margin-top: 4px; line-height: 1.4;">
-            同一局域网实例共享网桥分配不同 IP (192.168.1.X)；独立局域网实例将独占专属隔离网桥与独立网段 (192.168.X.1)。
+          <div class="field-hint">
+            同一局域网共享 `br_fsems`（192.168.1.x）；独立局域网为实例分配专属网桥与网段。
           </div>
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="cancelCreate">取消</el-button>
-        <el-button type="primary" :loading="creating" @click="create">创建</el-button>
+        <el-button type="primary" :loading="creating" @click="create">创建实例</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, onBeforeUnmount, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
+import {
+  Delete,
+  Plus,
+  RefreshRight,
+  Search,
+  SwitchButton,
+  VideoPlay,
+} from "@element-plus/icons-vue";
 import {
   createInstance,
   fetchInstances,
@@ -81,10 +205,12 @@ import {
   deleteInstance,
 } from "@/api/endpoints";
 import type { Instance, Template } from "@/api/types";
-import { useAuthStore } from "@/stores/auth";
+import PageHeader from "@/components/PageHeader.vue";
+import StatusBadge from "@/components/StatusBadge.vue";
+import EmptyState from "@/components/EmptyState.vue";
+import { shortInstanceId } from "@/utils/instanceStatus";
 
 const router = useRouter();
-const auth = useAuthStore();
 const instances = ref<Instance[]>([]);
 const templates = ref<Template[]>([]);
 const loading = ref(false);
@@ -92,38 +218,55 @@ const showCreate = ref(false);
 const newName = ref("");
 const newTemplateId = ref<number | null>(null);
 const creating = ref(false);
-
-// 本地自定义 RootFS 文件或目录物理路径
 const newRootfsPath = ref("");
 const newNetworkType = ref<"same" | "different">("same");
+const searchQuery = ref("");
+let statusPollTimer: ReturnType<typeof setInterval> | null = null;
 
-function statusType(status: string) {
-  if (status === "RUNNING") return "success";
-  if (status === "STARTING") return "warning";
-  if (status === "STOPPED") return "info";
-  return "danger";
-}
+const runningCount = computed(() => instances.value.filter((i) => i.status === "RUNNING").length);
+const stoppedCount = computed(() => instances.value.filter((i) => i.status === "STOPPED").length);
+const transitionalCount = computed(() =>
+  instances.value.filter((i) => i.status === "STARTING" || i.status === "STOPPING").length
+);
 
-function statusText(status: string) {
-  const statusMap: Record<string, string> = {
-    LOADING: "加载中...",
-    STARTING: "启动中",
-    RUNNING: "运行中",
-    STOPPING: "停止中",
-    STOPPED: "已停止",
-  };
-  return statusMap[status] || status;
-}
+const filteredInstances = computed(() => {
+  const q = searchQuery.value.trim().toLowerCase();
+  if (!q) return instances.value;
+  return instances.value.filter(
+    (i) => i.name.toLowerCase().includes(q) || i.id.toLowerCase().includes(q)
+  );
+});
 
-async function load() {
-  loading.value = true;
+async function load(silent = false) {
+  if (!silent) {
+    loading.value = true;
+  }
   try {
     const data = await fetchInstances();
     instances.value = data.list;
   } finally {
-    loading.value = false;
+    if (!silent) {
+      loading.value = false;
+    }
   }
 }
+
+function syncStatusPolling() {
+  if (transitionalCount.value > 0) {
+    if (!statusPollTimer) {
+      statusPollTimer = setInterval(() => {
+        void load(true);
+      }, 3000);
+    }
+    return;
+  }
+  if (statusPollTimer) {
+    clearInterval(statusPollTimer);
+    statusPollTimer = null;
+  }
+}
+
+watch(transitionalCount, syncStatusPolling, { immediate: true });
 
 async function loadTemplates() {
   templates.value = await fetchTemplates();
@@ -133,9 +276,10 @@ async function loadTemplates() {
 }
 
 async function doAction(id: string, action: "start" | "stop" | "reset") {
+  const actionMap = { start: "启动", stop: "停止", reset: "重启" };
   try {
     await instanceAction(id, action);
-    ElMessage.success(`已执行 ${action}`);
+    ElMessage.success(`已执行${actionMap[action]}`);
     await load();
   } catch (e: unknown) {
     ElMessage.error(e instanceof Error ? e.message : "操作失败");
@@ -199,28 +343,77 @@ function resetForm() {
   newNetworkType.value = "same";
 }
 
-function logout() {
-  auth.logout();
-  router.push("/login");
-}
-
-function goToLogs() {
-  router.push("/logs");
-}
-
 onMounted(async () => {
   await Promise.all([load(), loadTemplates()]);
+});
+
+onBeforeUnmount(() => {
+  if (statusPollTimer) {
+    clearInterval(statusPollTimer);
+    statusPollTimer = null;
+  }
 });
 </script>
 
 <style scoped>
-.page {
-  padding: 24px;
+.instance-panel {
+  overflow: hidden;
 }
-.header {
+
+.stats-in-panel {
+  padding: 18px 22px 0;
+}
+
+.table-section {
+  padding-top: 12px;
+  border-top: 1px solid var(--fsems-border);
+  margin-top: 4px;
+}
+
+.name-cell {
   display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.name-text {
+  font-weight: 600;
+  color: var(--fsems-text);
+}
+
+.name-sub {
+  font-size: 0.78rem;
+}
+
+.row-actions {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
+  gap: 10px;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+.lifecycle-icons {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.icon-btn-wrap {
+  display: inline-flex;
+}
+
+.lifecycle-icon-btn {
+  border: none !important;
+  padding: 4px 6px !important;
+  margin: 0 !important;
+  height: auto !important;
+}
+
+.field-hint {
+  margin-top: 6px;
+  font-size: 0.78rem;
+  color: var(--fsems-text-dim);
+  line-height: 1.5;
 }
 </style>

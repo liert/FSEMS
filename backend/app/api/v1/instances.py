@@ -1,7 +1,8 @@
 import asyncio
+import json
 import logging
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_db, verify_ws_token
@@ -11,11 +12,15 @@ from app.schemas.instance import (
     InstanceActionResult,
     InstanceCreate,
     InstanceCreated,
+    InstanceDetailOut,
     InstanceListOut,
     InstanceOut,
+    DriveExpandRequest,
+    DriveExpandResult,
 )
-from app.services import instance_service
-from app.services.instance_service import get_instance, instance_to_out
+from app.schemas.snapshot import SnapshotCreate, SnapshotListOut, SnapshotOut, SnapshotTaskResponse
+from app.services import instance_service, snapshot_service
+from app.services.instance_service import get_instance, instance_detail_to_out, instance_to_out
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/instances", tags=["instances"])
@@ -61,24 +66,41 @@ async def instance_action(
     session: AsyncSession = Depends(get_db),
 ) -> ApiResponse[InstanceActionResult]:
     instance = await get_instance(session, instance_id)
-    updated = await instance_service.perform_action(session, instance, body.action)
+    allow_sigkill = True if body.allow_sigkill is None else body.allow_sigkill
+    updated = await instance_service.perform_action(
+        session, instance, body.action, allow_sigkill=allow_sigkill
+    )
     return ApiResponse(
         data=InstanceActionResult(id=updated.id, status=updated.status),
         message=f"Action '{body.action}' initiated",
     )
 
 
-@router.get("/{instance_id}", response_model=ApiResponse[InstanceOut])
+@router.get("/{instance_id}", response_model=ApiResponse[InstanceDetailOut])
 async def get_instance_detail(
     instance_id: str,
     _user: str = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
-) -> ApiResponse[InstanceOut]:
+) -> ApiResponse[InstanceDetailOut]:
     instance = await get_instance(session, instance_id)
     return ApiResponse(
-        data=InstanceOut(**instance_to_out(instance)),
+        data=InstanceDetailOut(**instance_detail_to_out(instance)),
         message="Instance details fetched",
     )
+
+
+@router.post("/{instance_id}/drive/expand", response_model=ApiResponse[DriveExpandResult])
+async def expand_instance_drive(
+    instance_id: str,
+    body: DriveExpandRequest,
+    _user: str = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[DriveExpandResult]:
+    instance = await get_instance(session, instance_id)
+    result = await instance_service.expand_instance_drive(
+        session, instance, body.expand_mb, body.manage_lifecycle
+    )
+    return ApiResponse(data=DriveExpandResult(**result), message="Drive expanded")
 
 
 @router.delete("/{instance_id}", response_model=ApiResponse[dict])
@@ -89,6 +111,70 @@ async def delete_instance(
 ) -> ApiResponse[dict]:
     await instance_service.delete_instance(session, instance_id)
     return ApiResponse(data={}, message="Instance deleted successfully")
+
+
+@router.get("/{instance_id}/snapshots", response_model=ApiResponse[SnapshotListOut])
+async def list_instance_snapshots(
+    instance_id: str,
+    _user: str = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[SnapshotListOut]:
+    await get_instance(session, instance_id)
+    items = await snapshot_service.list_snapshots(session, instance_id)
+    return ApiResponse(
+        data=SnapshotListOut(list=[SnapshotOut.model_validate(s) for s in items]),
+        message="Snapshots fetched",
+    )
+
+
+@router.post(
+    "/{instance_id}/snapshots",
+    response_model=ApiResponse[SnapshotTaskResponse],
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def create_instance_snapshot(
+    instance_id: str,
+    body: SnapshotCreate,
+    _user: str = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[SnapshotTaskResponse]:
+    instance = await get_instance(session, instance_id)
+    task_id, snapshot_id = await snapshot_service.queue_create_snapshot(session, instance, body.name)
+    return ApiResponse(
+        data=SnapshotTaskResponse(task_id=task_id, snapshot_id=snapshot_id),
+        message="Snapshot create task queued",
+    )
+
+
+@router.post(
+    "/{instance_id}/snapshots/{snapshot_id}/restore",
+    response_model=ApiResponse[SnapshotTaskResponse],
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def restore_instance_snapshot(
+    instance_id: str,
+    snapshot_id: str,
+    _user: str = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[SnapshotTaskResponse]:
+    instance = await get_instance(session, instance_id)
+    task_id = await snapshot_service.queue_restore_snapshot(session, instance, snapshot_id)
+    return ApiResponse(
+        data=SnapshotTaskResponse(task_id=task_id, snapshot_id=snapshot_id),
+        message="Snapshot restore task queued",
+    )
+
+
+@router.delete("/{instance_id}/snapshots/{snapshot_id}", response_model=ApiResponse[dict])
+async def delete_instance_snapshot(
+    instance_id: str,
+    snapshot_id: str,
+    _user: str = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[dict]:
+    await get_instance(session, instance_id)
+    await snapshot_service.delete_snapshot(session, instance_id, snapshot_id)
+    return ApiResponse(data={}, message="Snapshot deleted")
 
 
 @router.websocket("/{instance_id}/console")
@@ -127,8 +213,17 @@ async def console_ws(websocket: WebSocket, instance_id: str, token: str | None =
                 break
             if "bytes" in message and message["bytes"]:
                 cb.write_bytes(message["bytes"])
-            elif "text" in message and message["text"] == "ping":
-                await websocket.send_text("pong")
+            elif "text" in message:
+                text = message["text"]
+                if text == "ping":
+                    await websocket.send_text("pong")
+                else:
+                    try:
+                        payload = json.loads(text)
+                        if payload.get("type") == "resize":
+                            cb.write_resize(payload.get("cols", 80), payload.get("rows", 24))
+                    except (json.JSONDecodeError, TypeError, ValueError):
+                        pass
     except WebSocketDisconnect:
         pass
     finally:

@@ -12,6 +12,7 @@ class InstanceCreate(BaseModel):
 
 class InstanceAction(BaseModel):
     action: str = Field(pattern="^(start|stop|reset)$")
+    allow_sigkill: bool | None = None
 
 
 class InstanceOut(BaseModel):
@@ -30,6 +31,22 @@ class InstanceOut(BaseModel):
     created_at: datetime
 
 
+class InstanceDetailOut(InstanceOut):
+    template_name: str
+    template_arch: str
+    ram_size_mb: int
+    ram_used_mb: float | None = None
+    drive_path: str | None = None
+    drive_fs_total_bytes: int | None = None
+    drive_fs_used_bytes: int | None = None
+    custom_rootfs_source_path: str | None = None
+    custom_rootfs_dir_path: str | None = None
+    custom_rootfs_dir_size_bytes: int | None = None
+    workspace_path: str
+    kernel_path: str
+    error_msg: str | None = None
+
+
 class InstanceListOut(BaseModel):
     total: int
     list: list[InstanceOut]
@@ -42,4 +59,19 @@ class InstanceCreated(BaseModel):
 
 class InstanceActionResult(BaseModel):
     id: str
+    status: str
+
+
+class DriveExpandRequest(BaseModel):
+    expand_mb: int = Field(ge=1, le=4096, description="扩容增量 (MB)")
+    manage_lifecycle: bool = True
+
+
+class DriveExpandResult(BaseModel):
+    expanded_mb: int
+    drive_path: str
+    drive_fs_total_bytes: int | None = None
+    drive_fs_used_bytes: int | None = None
+    stopped_for_expand: bool = False
+    restarted: bool = False
     status: str

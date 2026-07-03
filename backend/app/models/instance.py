@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
+
+if TYPE_CHECKING:
+    from app.models.snapshot import Snapshot
+    from app.models.template import Template
 
 
 class Instance(Base):
@@ -20,6 +25,7 @@ class Instance(Base):
     guest_ssh_host: Mapped[str | None] = mapped_column(String(45), nullable=True)
     network_type: Mapped[str | None] = mapped_column(String(20), default="same", server_default="same")
     bridge_name: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    custom_rootfs_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     pid: Mapped[int | None] = mapped_column(Integer, nullable=True)
     serial_socket: Mapped[str | None] = mapped_column(String(255), nullable=True)
     error_msg: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -29,3 +35,4 @@ class Instance(Base):
     )
 
     template: Mapped[Template] = relationship(back_populates="instances")
+    snapshots: Mapped[list[Snapshot]] = relationship(back_populates="instance", cascade="all, delete-orphan")

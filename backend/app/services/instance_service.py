@@ -13,6 +13,12 @@ from app.core.config import get_settings
 from app.models.instance import Instance
 from app.models.template import Template
 from app.services import qemu_manager
+from app.services.instance_info import (
+    expand_drive_image,
+    get_disk_image_stats,
+    get_path_size_bytes,
+    get_process_rss_mb,
+)
 from app.services.network_setup import bridge_exists
 
 logger = logging.getLogger(__name__)
@@ -34,6 +40,34 @@ def instance_to_out(instance: Instance) -> dict:
         "bridge_name": instance.bridge_name,
         "pid": instance.pid,
         "created_at": instance.created_at,
+    }
+
+
+def instance_detail_to_out(instance: Instance) -> dict:
+    settings = get_settings()
+    template = instance.template
+    workspace = (settings.workspace_path / instance.id).resolve()
+    drive_path = Path(instance.drive_path) if instance.drive_path else workspace / "rootfs.img"
+    custom_rootfs_dir = workspace / "rootfs"
+
+    drive_virtual, drive_actual = get_disk_image_stats(drive_path)
+    custom_rootfs_dir_size = get_path_size_bytes(custom_rootfs_dir) if custom_rootfs_dir.is_dir() else None
+
+    return {
+        **instance_to_out(instance),
+        "template_name": template.name if template else "",
+        "template_arch": template.arch if template else "",
+        "ram_size_mb": template.ram_size if template else 0,
+        "ram_used_mb": get_process_rss_mb(instance.pid),
+        "drive_path": str(drive_path) if drive_path.exists() else instance.drive_path,
+        "drive_fs_total_bytes": drive_virtual,
+        "drive_fs_used_bytes": drive_actual,
+        "custom_rootfs_source_path": instance.custom_rootfs_path,
+        "custom_rootfs_dir_path": str(custom_rootfs_dir) if custom_rootfs_dir.is_dir() else None,
+        "custom_rootfs_dir_size_bytes": custom_rootfs_dir_size,
+        "workspace_path": str(workspace),
+        "kernel_path": template.kernel_path if template else "",
+        "error_msg": instance.error_msg,
     }
 
 
@@ -382,6 +416,7 @@ async def create_instance(
         guest_ssh_host=guest_ssh_host,
         network_type=net_type,
         bridge_name=bridge_name,
+        custom_rootfs_path=rootfs_path.strip() if rootfs_path and rootfs_path.strip() else None,
     )
     session.add(instance)
     await session.commit()
@@ -392,6 +427,21 @@ async def create_instance(
 
 
 
+async def _apply_boot_result(session: AsyncSession, instance_id: str, ok: bool) -> None:
+    instance = await get_instance(session, instance_id)
+    if ok:
+        instance.status = "RUNNING"
+        instance.error_msg = None
+    else:
+        await qemu_manager.cleanup_instance_resources(instance)
+        instance.status = "STOPPED"
+        instance.pid = None
+        instance.tap_name = None
+        instance.error_msg = "Boot timeout"
+    instance.updated_at = datetime.utcnow()
+    await session.commit()
+
+
 async def _boot_watch(session_factory, instance_id: str) -> None:
     settings = get_settings()
     async with session_factory() as session:
@@ -400,21 +450,18 @@ async def _boot_watch(session_factory, instance_id: str) -> None:
         host = instance.guest_ssh_host or template.guest_ssh_host
         port = template.guest_ssh_port
         ok = await qemu_manager.wait_boot(host, port, settings.BOOT_TIMEOUT_SEC)
-        instance = await get_instance(session, instance_id)
-        if ok:
-            instance.status = "RUNNING"
-            instance.error_msg = None
-        else:
-            await qemu_manager.cleanup_instance_resources(instance)
-            instance.status = "STOPPED"
-            instance.pid = None
-            instance.tap_name = None
-            instance.error_msg = "Boot timeout"
-        instance.updated_at = datetime.utcnow()
-        await session.commit()
+    async with session_factory() as session:
+        await _apply_boot_result(session, instance_id, ok)
 
 
-async def perform_action(session: AsyncSession, instance: Instance, action: str) -> Instance:
+async def perform_action(
+    session: AsyncSession,
+    instance: Instance,
+    action: str,
+    *,
+    allow_sigkill: bool = True,
+    wait_boot: bool = False,
+) -> Instance:
     settings = get_settings()
     template = instance.template
 
@@ -424,6 +471,21 @@ async def perform_action(session: AsyncSession, instance: Instance, action: str)
                 status_code=status.HTTP_409_CONFLICT,
                 detail={"error_code": "INSTANCE_STATE_CONFLICT", "message": "Already running"},
             )
+
+        from app.services.guest_fs_offline import release_offline_mount
+
+        try:
+            await release_offline_mount(instance.id)
+        except Exception as e:
+            logger.warning("启动前卸载离线 VFS 失败 instance=%s: %s", instance.id, e)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error_code": "OFFLINE_MOUNT_BUSY",
+                    "message": f"Cannot start while offline mount is active: {e}",
+                },
+            ) from e
+
         bridge = instance.bridge_name or settings.FSEMS_BRIDGE
         host_ip = None
         if bridge == settings.FSEMS_BRIDGE:
@@ -472,7 +534,14 @@ async def perform_action(session: AsyncSession, instance: Instance, action: str)
 
         from app.core.database import SessionLocal
 
-        asyncio.create_task(_boot_watch(SessionLocal, instance.id))
+        if wait_boot:
+            host = instance.guest_ssh_host or template.guest_ssh_host
+            port = template.guest_ssh_port
+            ok = await qemu_manager.wait_boot(host, port, settings.BOOT_TIMEOUT_SEC)
+            await _apply_boot_result(session, instance.id, ok)
+            instance = await get_instance(session, instance.id)
+        else:
+            asyncio.create_task(_boot_watch(SessionLocal, instance.id))
         await session.refresh(instance, attribute_names=["template"])
         return instance
 
@@ -484,7 +553,15 @@ async def perform_action(session: AsyncSession, instance: Instance, action: str)
             )
         instance.status = "STOPPING"
         await session.commit()
-        await qemu_manager.cleanup_instance_resources(instance)
+        try:
+            await qemu_manager.cleanup_instance_resources(instance, allow_sigkill=allow_sigkill)
+        except RuntimeError as exc:
+            instance.status = "RUNNING"
+            await session.commit()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"error_code": "INSTANCE_STATE_CONFLICT", "message": str(exc)},
+            ) from exc
         instance.status = "STOPPED"
         instance.pid = None
         instance.tap_name = None
@@ -501,9 +578,105 @@ async def perform_action(session: AsyncSession, instance: Instance, action: str)
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid action")
 
 
+async def expand_instance_drive(
+    session: AsyncSession,
+    instance: Instance,
+    expand_mb: int,
+    manage_lifecycle: bool = True,
+) -> dict:
+    if instance.status == "STOPPING":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error_code": "INSTANCE_STATE_CONFLICT",
+                "message": "虚拟机正在停止中，请稍后再试",
+            },
+        )
+
+    if not manage_lifecycle:
+        if instance.status != "STOPPED":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error_code": "INSTANCE_STATE_CONFLICT",
+                    "message": "请先停止虚拟机后再扩容磁盘",
+                },
+            )
+        should_restart = False
+        stopped_for_expand = False
+    else:
+        should_restart = instance.status in RUNNING_STATUSES
+        stopped_for_expand = False
+        if should_restart:
+            logger.info("扩容前优雅停止实例 %s", instance.id)
+            instance = await perform_action(session, instance, "stop", allow_sigkill=False)
+            instance = await get_instance(session, instance.id)
+            stopped_for_expand = True
+
+    settings = get_settings()
+    workspace = (settings.workspace_path / instance.id).resolve()
+    drive_path = Path(instance.drive_path) if instance.drive_path else workspace / "rootfs.img"
+    if not drive_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error_code": "FS_PATH_NOT_FOUND", "message": f"启动磁盘不存在: {drive_path}"},
+        )
+
+    from app.services.guest_fs_offline import release_offline_mount
+
+    try:
+        await release_offline_mount(instance.id)
+    except Exception as exc:
+        logger.warning("扩容前卸载离线 VFS 失败 instance=%s: %s", instance.id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"error_code": "OFFLINE_MOUNT_BUSY", "message": f"请先关闭离线浏览后再扩容: {exc}"},
+        ) from exc
+
+    try:
+        await asyncio.to_thread(expand_drive_image, drive_path, expand_mb)
+    except Exception as exc:
+        logger.exception("扩容启动磁盘失败 instance=%s path=%s", instance.id, drive_path)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error_code": "DRIVE_EXPAND_FAILED", "message": f"扩容失败: {exc}"},
+        ) from exc
+
+    restarted = False
+    if should_restart:
+        logger.info("扩容完成，重新启动实例 %s", instance.id)
+        instance = await get_instance(session, instance.id)
+        instance = await perform_action(session, instance, "start", wait_boot=True)
+        instance = await get_instance(session, instance.id)
+        restarted = instance.status == "RUNNING"
+
+    total, used = get_disk_image_stats(drive_path)
+    return {
+        "expanded_mb": expand_mb,
+        "drive_path": str(drive_path),
+        "drive_fs_total_bytes": total,
+        "drive_fs_used_bytes": used,
+        "stopped_for_expand": stopped_for_expand,
+        "restarted": restarted,
+        "status": instance.status,
+    }
+
+
 async def delete_instance(session: AsyncSession, instance_id: str) -> None:
     instance = await get_instance(session, instance_id)
-    
+
+    from app.services.guest_fs_offline import release_offline_mount
+
+    try:
+        await release_offline_mount(instance_id)
+    except Exception as e:
+        logger.warning("删除实例前卸载离线 VFS 失败 instance=%s: %s", instance_id, e)
+
+    from sqlalchemy import delete
+    from app.models.snapshot import Snapshot
+
+    await session.execute(delete(Snapshot).where(Snapshot.instance_id == instance_id))
+
     # 1. 如果实例在运行中，先停止并清理网卡资源
     if instance.status in RUNNING_STATUSES:
         try:

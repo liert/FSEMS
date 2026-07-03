@@ -5,7 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core.config import get_settings
 from app.models.base import Base
-from app.models import instance, task, template  # noqa: F401
+from app.models import instance, snapshot, task, template  # noqa: F401
+from app.core.seed_templates import build_seed_templates
 from app.models.template import Template
 
 settings = get_settings()
@@ -32,38 +33,6 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
-SEED_TEMPLATES = [
-    {
-        "name": "OpenWrt 25.12.4 (ARMv8)",
-        "arch": "aarch64",
-        "qemu_binary": "qemu-system-aarch64",
-        "machine": "virt",
-        "cpu": "cortex-a72",
-        "kernel_path": str((settings.workspace_path.parent / "kernels" / "openwrt-25.12.4-armsr-armv8-generic-kernel.bin").resolve()),
-        "drive_path": str((settings.workspace_path.parent / "rootfs" / "openwrt-25.12.4-armsr-armv8-generic-ext4-rootfs.img.gz").resolve()),
-        "kernel_append": "root=/dev/vda rootfstype=ext4 console=ttyAMA0",
-        "ram_size": 512,
-        "guest_ssh_host": "192.168.1.1",
-        "guest_ssh_port": 22,
-        "extra_args": "",
-    },
-    {
-        "name": "OpenWrt Snapshot (ARMv8 Glibc)",
-        "arch": "aarch64",
-        "qemu_binary": "qemu-system-aarch64",
-        "machine": "virt",
-        "cpu": "cortex-a72",
-        "kernel_path": str((settings.workspace_path.parent / "kernels" / "openwrt-snapshot-armsr-armv8-generic-kernel.bin").resolve()),
-        "drive_path": str((settings.workspace_path.parent / "rootfs" / "openwrt-snapshot-armsr-armv8-generic-ext4-rootfs.img.gz").resolve()),
-        "kernel_append": "root=/dev/vda rootfstype=ext4 console=ttyAMA0",
-        "ram_size": 512,
-        "guest_ssh_host": "192.168.1.1",
-        "guest_ssh_port": 22,
-        "extra_args": "",
-    }
-]
-
-
 async def init_db() -> None:
     from sqlalchemy import text
     async with engine.begin() as conn:
@@ -76,14 +45,45 @@ async def init_db() -> None:
             await conn.execute(text("ALTER TABLE instances ADD COLUMN bridge_name VARCHAR(50) DEFAULT 'br_fsems'"))
         except Exception:
             pass
+        try:
+            await conn.execute(text("ALTER TABLE instances ADD COLUMN custom_rootfs_path VARCHAR(512)"))
+        except Exception:
+            pass
+        try:
+            await conn.execute(text("ALTER TABLE tasks ADD COLUMN result_ref VARCHAR(50)"))
+        except Exception:
+            pass
 
     async with SessionLocal() as session:
-        # 清除旧模版数据，确保版本/架构模板更新生效
-        from sqlalchemy import delete
-        await session.execute(delete(Template))
-        await session.commit()
+        await _seed_templates(session)
 
-        # 批量添加种子模板
-        for item in SEED_TEMPLATES:
+
+async def _seed_templates(session: AsyncSession) -> None:
+    """按 name 幂等写入种子模板：保留已有 id，避免破坏实例外键。"""
+    result = await session.execute(select(Template))
+    existing_by_name = {t.name: t for t in result.scalars().all()}
+
+    updatable_fields = (
+        "arch",
+        "qemu_binary",
+        "machine",
+        "cpu",
+        "kernel_path",
+        "drive_path",
+        "kernel_append",
+        "ram_size",
+        "guest_ssh_host",
+        "guest_ssh_port",
+        "extra_args",
+    )
+
+    for item in build_seed_templates(settings):
+        name = item["name"]
+        if name in existing_by_name:
+            tpl = existing_by_name[name]
+            for field in updatable_fields:
+                setattr(tpl, field, item[field])
+        else:
             session.add(Template(**item))
-        await session.commit()
+
+    await session.commit()

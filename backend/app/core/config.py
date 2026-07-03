@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     API_HOST: str = "127.0.0.1"
     API_PORT: int = 8000
     FSEMS_WORKSPACE: str = ""
+    FSEMS_MNT_DIR: str = ""
     LOGS_DIR: str = ""
 
     FSEMS_BRIDGE: str = "br_fsems"
@@ -58,6 +59,15 @@ class Settings(BaseSettings):
             return v
         return str((_REPO_ROOT / "data" / "workspace").resolve())
 
+    @field_validator("FSEMS_MNT_DIR", mode="before")
+    @classmethod
+    def default_mnt_dir(cls, v: str) -> str:
+        if v:
+            if v.startswith("./"):
+                return str((_REPO_ROOT / v.removeprefix("./")).resolve())
+            return v
+        return str((_REPO_ROOT / "data" / "mnt").resolve())
+
     @field_validator("LOGS_DIR", mode="before")
     @classmethod
     def default_logs_dir(cls, v: str) -> str:
@@ -81,8 +91,12 @@ class Settings(BaseSettings):
     def workspace_path(self) -> Path:
         return Path(self.FSEMS_WORKSPACE).resolve()
 
+    def offline_mount_path(self, instance_id: str) -> Path:
+        return (Path(self.FSEMS_MNT_DIR) / instance_id).resolve()
+
     def ensure_dirs(self) -> None:
         self.workspace_path.mkdir(parents=True, exist_ok=True)
+        Path(self.FSEMS_MNT_DIR).mkdir(parents=True, exist_ok=True)
         db_path = self.database_path
         if db_path:
             db_path.parent.mkdir(parents=True, exist_ok=True)

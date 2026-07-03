@@ -29,11 +29,8 @@ fi
 # shellcheck disable=SC1091
 source backend/.venv/bin/activate
 
-echo "Starting FastAPI on ${API_HOST}:${API_PORT} ..."
+echo "Starting FastAPI on ${API_HOST}:${API_PORT} (Celery worker auto-starts via app lifespan) ..."
 (cd backend && uvicorn app.main:app --host "$API_HOST" --port "$API_PORT" --reload) &
-
-echo "Starting Celery worker ..."
-celery -A app.core.celery_app worker --loglevel=info --workdir backend &
 
 if [[ -d frontend/node_modules ]]; then
   echo "Starting Vite dev server ..."

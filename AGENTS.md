@@ -19,9 +19,9 @@ QEMU 启动方式参考用户脚本：`/home/kali/openwrt/armv8/start.sh`（TAP 
 | 不用 Docker | 宿主机原生进程 |
 | SQLite3 | WAL，`DATABASE_URL` 见 `.env.example` |
 | 不用 libvirt | 仅 `subprocess` 管理 QEMU |
-| 网络 | **TAP + `br_fsems`**，不用 `-netdev user` hostfwd |
-| SSH/SCP 目标 | **`192.168.1.1:22`**（模板 `guest_ssh_host`），不是 `127.0.0.1:22222` |
-| Phase 1 | **同时仅 1 个 RUNNING 实例** |
+| 网络 | **TAP + 网桥**（默认 `br_fsems`），不用 `-netdev user` hostfwd |
+| SSH/SCP 目标 | 实例 `guest_ssh_host:22`（创建时分配，非 `127.0.0.1:22222`） |
+| 多实例 | 同网桥模式按 `192.168.1.X` 分配 IP；独立网桥模式使用 `br_fs_X` + `192.168.X.0/24` |
 
 ---
 
@@ -39,16 +39,22 @@ sudo ./scripts/setup_network.sh
 cp .env.example .env
 sudo mkdir -p /var/fsems/{data,workspace,images,kernels,mnt}
 sudo chown -R "$USER:$USER" /var/fsems
-# 复制固件到 /var/fsems/kernels 与 /var/fsems/images（见开发文档 §4.4）
+# 复制固件到 /var/fsems/kernels 与 /var/fsems/rootfs（见开发文档 §4.4）
 ```
 
-Backend 与 Celery **同一用户**、**同一 `.env`**。
+Backend 与 Celery **同一用户**、**同一 `.env`**。`uvicorn` 启动时会自动尝试拉起 Redis 与 Celery worker（见 `app/main.py` lifespan）。
+
+```bash
+./scripts/dev_start.sh   # 或分别启动 backend + frontend
+```
+
+TAP/网桥操作需 **root 或免密 sudo**；开发环境建议 `sudo` 启动后端。
 
 ---
 
 ## QEMU 要点（`qemu_manager.py`）
 
-1. `setup_tap`: 创建 `tap_{id[:8]}`，加入 `br_fsems`
+1. `setup_tap`: 创建 `tap_{id[:8]}`，加入实例所属网桥
 2. 启动命令见开发文档 **§5.2.2**（基于用户 start.sh，串口改 Unix Socket）
 3. `wait_boot`: TCP 探活 `guest_ssh_host:22`，超时 `BOOT_TIMEOUT_SEC`
 4. `stop`: SIGTERM → 清理 TAP + serial socket
@@ -74,9 +80,13 @@ Backend 与 Celery **同一用户**、**同一 `.env`**。
 
 ---
 
-## Phase 1 编码顺序
+## 实现阶段
 
-严格按开发文档 **§13** 步骤 1→10 实现；不要跳步同时写 Celery/SCP（属 Phase 2）。
+| 阶段 | 状态 | 说明 |
+| :--- | :--- | :--- |
+| Phase 1 | 已完成 | 认证、模板列表、实例 CRUD/生命周期、串口 WS、宿主机 VFS、日志 |
+| Phase 2 | 已完成 | Celery SCP、`/fs/guest`、`/fs/transfer`、双栏 `FileManager.vue`、任务进度 |
+| Phase 3 | 已完成 | 离线 VFS、模板 CRUD/UI、串口 resize、磁盘快照、多架构 seed |
 
 ## 文档索引
 
@@ -93,4 +103,4 @@ Backend 与 Celery **同一用户**、**同一 `.env`**。
 
 ## 文档状态
 
-**Phase 1 已实现**（backend + frontend 骨架）。后续按 §13 Phase 2 接入 Celery/SCP/访客机 VFS。
+**Phase 1–3 功能已实现。** 后续可按需扩展 qcow2 快照、传输字节级进度、多用户认证等。

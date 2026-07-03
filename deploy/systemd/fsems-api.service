@@ -1,0 +1,16 @@
+[Unit]
+Description=FSEMS FastAPI backend
+After=network.target redis-server.service
+Wants=redis-server.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/fsems/backend
+EnvironmentFile=/etc/fsems/fsems.env
+ExecStart=/opt/fsems/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --app-dir .
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

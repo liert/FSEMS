@@ -19,11 +19,15 @@ async def run_privileged_cmd(args: list[str], *, check: bool = True) -> subproce
         
     logger.info("执行特权命令: %s", " ".join(cmd))
     
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError as exc:
+        missing = cmd[1] if not is_root and cmd and cmd[0] == "sudo" else (cmd[0] if cmd else "unknown")
+        raise RuntimeError(f"命令不存在: {missing} ({exc})") from exc
     stdout, stderr = await proc.communicate()
     
     result = subprocess.CompletedProcess(
@@ -36,10 +40,7 @@ async def run_privileged_cmd(args: list[str], *, check: bool = True) -> subproce
     if check and result.returncode != 0:
         err_clean = result.stderr.strip()
         logger.error("特权命令失败: %s. 错误信息: %s", " ".join(cmd), err_clean)
-        raise RuntimeError(
-            f"特权命令执行失败: {err_clean or 'Permission Denied'}\n"
-            f"👉 请确保后端服务是以 sudo / root 启动的（如: sudo ../backend/.venv/bin/uvicorn app.main:app --reload）"
-        )
+        raise RuntimeError(err_clean or f"特权命令执行失败 (exit {result.returncode})")
         
     return result
 

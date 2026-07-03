@@ -14,6 +14,29 @@ request.interceptors.request.use((config) => {
   return config;
 });
 
+function extractApiErrorMessage(error: unknown): string | undefined {
+  if (!error || typeof error !== "object" || !("response" in error)) {
+    return undefined;
+  }
+  const data = (error as { response?: { data?: unknown } }).response?.data;
+  if (!data || typeof data !== "object") {
+    return undefined;
+  }
+  const payload = data as { message?: string; detail?: unknown };
+  if (payload.message) {
+    return payload.message;
+  }
+  const detail = payload.detail;
+  if (typeof detail === "string") {
+    return detail;
+  }
+  if (detail && typeof detail === "object" && "message" in detail) {
+    const message = (detail as { message?: string }).message;
+    return message || undefined;
+  }
+  return undefined;
+}
+
 request.interceptors.response.use(
   (response) => response,
   (error) => {
@@ -22,6 +45,10 @@ request.interceptors.response.use(
       if (!window.location.pathname.startsWith("/login")) {
         window.location.href = "/login";
       }
+    }
+    const apiMessage = extractApiErrorMessage(error);
+    if (apiMessage) {
+      error.message = apiMessage;
     }
     return Promise.reject(error);
   }
