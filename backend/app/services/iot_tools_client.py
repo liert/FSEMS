@@ -1,9 +1,10 @@
 """
 iot-tools 集成客户端（子项目 third_party/iot-tools）。
 
-- CLI：`iot-tools scp ...`（内部 asyncssh + use_sftp=False，等同 scp -O）
-- FSEMS 双栏：子进程调用 CLI，注入 IOT_TOOLS_SSH_* 环境变量
-- 无需 sshpass
+- CLI：`iot-tools scp ...` 或 `python -m iot_tools scp ...`
+- FSEMS 双栏：子进程调用；优先「venv 内脚本」或「当前解释器 -m iot_tools」
+- 注意：venv 的 python 常是指向 /usr/bin/python3 的符号链接，
+  找 sibling 脚本时不要 Path.resolve() 整个 executable。
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ import contextlib
 import logging
 import os
 import shutil
+import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
@@ -23,22 +25,63 @@ logger = logging.getLogger(__name__)
 ProgressCallback = Callable[[int], Awaitable[None] | None]
 
 
-def resolve_iot_tools_bin() -> str:
+def _venv_scripts_dir() -> Path:
+    """当前解释器所在目录（venv/bin）。不要 resolve()，否则会落到 /usr/bin。"""
+    return Path(sys.executable).parent
+
+
+def resolve_iot_tools_cmd() -> list[str]:
+    """
+    解析启动 iot-tools 的 argv。
+
+    优先级：
+    1. IOT_TOOLS_BIN 为绝对路径或非默认命令名
+    2. IOT_TOOLS_BIN 为 -m / module → python -m iot_tools
+    3. 与 sys.executable 同目录的 iot-tools 脚本（venv/bin，不 resolve）
+    4. PATH 中的 iot-tools
+    5. [sys.executable, '-m', 'iot_tools']
+    """
     settings = get_settings()
     configured = (getattr(settings, "IOT_TOOLS_BIN", None) or os.environ.get("IOT_TOOLS_BIN") or "").strip()
-    if configured:
-        return configured
+
+    if configured in {"-m", "module", "python -m"}:
+        return [sys.executable, "-m", "iot_tools"]
+
+    # 显式绝对路径 / 自定义命令（非默认占位 "iot-tools"）
+    if configured and configured != "iot-tools":
+        return [configured]
+    if configured == "iot-tools":
+        # 若用户配置了绝对路径式安装且 PATH 可用，下面 which 会命中；
+        # 先继续走 venv sibling 逻辑。
+        pass
+
+    sibling = _venv_scripts_dir() / "iot-tools"
+    if sibling.is_file() and os.access(sibling, os.X_OK):
+        return [str(sibling)]
+
     found = shutil.which("iot-tools")
     if found:
-        return found
-    return "iot-tools"
+        return [found]
+
+    return [sys.executable, "-m", "iot_tools"]
+
+
+def resolve_iot_tools_bin() -> str:
+    """兼容旧接口。"""
+    cmd = resolve_iot_tools_cmd()
+    if len(cmd) >= 3 and cmd[1] == "-m":
+        return f"{cmd[0]} -m iot_tools"
+    return cmd[0]
 
 
 def iot_tools_available() -> bool:
-    bin_name = resolve_iot_tools_bin()
-    if Path(bin_name).is_file():
-        return os.access(bin_name, os.X_OK)
-    return shutil.which(bin_name) is not None
+    """当前解释器能否 import iot_tools（与 uvicorn/Celery 同一 venv 即可）。"""
+    try:
+        import iot_tools  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
 
 
 def format_remote(user: str, host: str, remote_path: str) -> str:
@@ -52,14 +95,18 @@ def build_iot_env(
     password: str | None = None,
     inherit: bool = True,
 ) -> dict[str, str]:
-    """构造 iot-tools 子进程环境（端口 / 密码）。"""
+    """构造 iot-tools 子进程环境（端口 / 密码 / PATH）。"""
     settings = get_settings()
     env = dict(os.environ) if inherit else {}
 
-    ssh_port = str(port if port is not None else 22)
-    env["IOT_TOOLS_SSH_PORT"] = ssh_port
+    venv_bin = str(_venv_scripts_dir())
+    path = env.get("PATH", "")
+    parts = path.split(os.pathsep) if path else []
+    if venv_bin not in parts:
+        env["PATH"] = venv_bin + (os.pathsep + path if path else "")
 
-    # 始终写入，含空字符串（OpenWrt 空密码）；由 iot-tools/asyncssh 自动认证
+    env["IOT_TOOLS_SSH_PORT"] = str(port if port is not None else 22)
+
     if password is None:
         password = settings.FSEMS_GUEST_SSH_PASSWORD
     env["IOT_TOOLS_SSH_PASSWORD"] = password if password is not None else ""
@@ -76,7 +123,7 @@ async def _run_iot_tools(
     timeout_sec: float = 600,
     on_line: Callable[[str], None] | None = None,
 ) -> str:
-    cmd = [resolve_iot_tools_bin(), *args]
+    cmd = [*resolve_iot_tools_cmd(), *args]
     workdir = str(cwd) if cwd else None
     logger.info("iot-tools: %s (cwd=%s)", " ".join(cmd), workdir)
 
@@ -90,8 +137,9 @@ async def _run_iot_tools(
         )
     except FileNotFoundError as exc:
         raise RuntimeError(
-            "iot-tools 未安装。请在 backend venv 中执行: "
-            "pip install -e ../third_party/iot-tools"
+            "无法启动 iot-tools。请用与 Celery 相同的解释器安装:\n"
+            f"  {sys.executable} -m pip install -e "
+            f"{Path(__file__).resolve().parents[3] / 'third_party' / 'iot-tools'}"
         ) from exc
 
     chunks: list[str] = []
@@ -138,9 +186,6 @@ async def scp_host_to_guest(
     timeout_sec: float = 600,
     progress: ProgressCallback | None = None,
 ) -> str:
-    """
-    宿主机 → 访客机。ELF 时在 search_root（默认源文件父目录）解析 NEEDED 依赖。
-    """
     settings = get_settings()
     ssh_user = user or settings.FSEMS_GUEST_SSH_USER or "root"
     remote = format_remote(ssh_user, guest_host, remote_path)
@@ -156,7 +201,6 @@ async def scp_host_to_guest(
         await _maybe_await(progress(15))
 
     env = build_iot_env(port=port, password=password)
-    # cwd 与 search-root 对齐，避免相对路径歧义
     out = await _run_iot_tools(args, cwd=str(root), env=env, timeout_sec=timeout_sec)
 
     if progress:
@@ -176,7 +220,6 @@ async def scp_guest_to_host(
     timeout_sec: float = 600,
     progress: ProgressCallback | None = None,
 ) -> str:
-    """访客机 → 宿主机（--pull，不解析依赖）。"""
     settings = get_settings()
     ssh_user = user or settings.FSEMS_GUEST_SSH_USER or "root"
     remote = format_remote(ssh_user, guest_host, remote_path)
@@ -204,7 +247,6 @@ async def _maybe_await(result: Awaitable[None] | None) -> None:
         await result
 
 
-# 兼容旧名称
 async def smart_scp(
     local_path: str | Path,
     remote: str,

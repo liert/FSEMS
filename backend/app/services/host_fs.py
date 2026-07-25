@@ -86,8 +86,9 @@ def list_directory(path: Path) -> list[dict]:
 
     for entry in sorted(items, key=lambda p: (not is_dir_safe(p), p.name.lower())):
         try:
-            stat = entry.stat()
+            # is_dir() / stat() 默认跟随符号链接：链接到目录时按目录展示并可进入
             is_dir = entry.is_dir()
+            stat = entry.stat()
         except (FileNotFoundError, OSError):
             try:
                 stat = entry.stat(follow_symlinks=False)
@@ -100,7 +101,7 @@ def list_directory(path: Path) -> list[dict]:
                 "name": entry.name,
                 "path": str(entry),
                 "is_dir": is_dir,
-                "size": stat.st_size,
+                "size": 0 if is_dir else stat.st_size,
                 "mtime": int(stat.st_mtime),
             }
         )

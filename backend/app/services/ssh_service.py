@@ -107,7 +107,8 @@ LS_RE = re.compile(
 
 def parse_ls_line(line: str, parent_path: str) -> dict | None:
     """
-    解析 ls 输出的一行，返回包含 name, path, is_dir, size, mtime 的字典
+    解析 ls 输出的一行，返回 name/path/is_dir/size/mtime/is_link/link_target。
+    注意：符号链接的 is_dir 初值为 False，需 list_guest_directory 用 test -d 判定是否指向目录。
     """
     line = line.strip()
     if not line:
@@ -115,37 +116,37 @@ def parse_ls_line(line: str, parent_path: str) -> dict | None:
     match = LS_RE.match(line)
     if not match:
         return None
-    
-    mode, owner, group, size_str, date_str, full_name_or_path = match.groups()
-    is_dir = mode.startswith('d')
-    size = int(size_str)
-    
-    # 剔除软链接的目标路径，只保留链接本身 (例如 "/bin/sh -> busybox" 提取出 "/bin/sh" 或 "sh")
-    if mode.startswith('l') and " -> " in full_name_or_path:
-        full_name_or_path = full_name_or_path.split(" -> ")[0]
 
-    # 判断返回的是完整路径还是单纯的文件名
+    mode, owner, group, size_str, date_str, full_name_or_path = match.groups()
+    is_link = mode.startswith("l")
+    is_dir = mode.startswith("d")
+    size = int(size_str)
+    link_target: str | None = None
+
+    # 剔除软链接的目标路径，只保留链接本身 (例如 "sh -> busybox")
+    if is_link and " -> " in full_name_or_path:
+        full_name_or_path, link_target = full_name_or_path.split(" -> ", 1)
+        full_name_or_path = full_name_or_path.strip()
+        link_target = link_target.strip()
+
     if full_name_or_path.startswith("/"):
         full_path = posixpath.normpath(full_name_or_path)
         name = posixpath.basename(full_path)
     else:
         name = full_name_or_path
         full_path = posixpath.normpath(posixpath.join(parent_path, name))
-        
+
     if not name:
         name = "/"
 
-    # 解析时间戳
     mtime = 0
     now = datetime.now()
     clean_date_str = " ".join(date_str.split())
-    # 尝试多种日期格式解析
     for fmt in ("%b %d %H:%M", "%b %d %Y", "%d %b %H:%M", "%d %b %Y"):
         try:
             dt = datetime.strptime(clean_date_str, fmt)
             if "%H:%M" in fmt:
                 dt = dt.replace(year=now.year)
-                # 如果解析出来的日期在未来大于1天，则认为是去年
                 if (dt - now).days > 1:
                     dt = dt.replace(year=now.year - 1)
             mtime = int(dt.timestamp())
@@ -158,53 +159,106 @@ def parse_ls_line(line: str, parent_path: str) -> dict | None:
         "path": full_path,
         "is_dir": is_dir,
         "size": size,
-        "mtime": mtime
+        "mtime": mtime,
+        "is_link": is_link,
+        "link_target": link_target,
     }
+
+
+async def _mark_symlink_dirs(conn: asyncssh.SSHClientConnection, entries: list[dict]) -> None:
+    """
+    OpenWrt 常见 lib -> usr/lib、var -> tmp：ls 显示为 l，但 test -d 为真。
+    批量探测，把指向目录的符号链接标成 is_dir，以便前端进入。
+    """
+    links = [e for e in entries if e.get("is_link") and not e.get("is_dir")]
+    if not links:
+        return
+
+    # BusyBox ash 兼容：逐个 test -d，输出 D<path> 或 F<path>
+    parts: list[str] = []
+    for e in links:
+        p = shlex.quote(e["path"])
+        parts.append(f'if [ -d {p} ]; then echo D{e["path"]}; else echo F{e["path"]}; fi')
+    script = " ; ".join(parts)
+    result = await conn.run(script)
+    if result.exit_status is None:
+        return
+    dir_paths = set()
+    for line in (result.stdout or "").splitlines():
+        line = line.strip()
+        if line.startswith("D"):
+            dir_paths.add(line[1:])
+    for e in links:
+        if e["path"] in dir_paths:
+            e["is_dir"] = True
+            e["size"] = 0
+
 
 async def list_guest_directory(host: str, port: int, path: str) -> list[dict]:
     """
-    通过 SSH 浏览访客机指定目录，支持 find 和 ls 解析，提供高兼容性
+    通过 SSH 浏览访客机指定目录；支持符号链接目录（OpenWrt /lib、/var 等）。
+
+    注意：BusyBox find 默认不跟随符号链接进入目录，对 /var -> /tmp 会列空。
+    使用 ls -la <path>/（尾部斜杠）强制进入链接目标。
     """
+    path = normalize_guest_path(path)
     quoted_path = shlex.quote(path)
-    entries = []
-    
+    # 尾部 / 让 shell/ls 跟随「指向目录的符号链接」
+    quoted_list = shlex.quote("/") if path == "/" else shlex.quote(path + "/")
+    entries: list[dict] = []
+
     async with await get_ssh_connection(host, port) as conn:
-        # 首先尝试文档要求的 find {path} -maxdepth 1 -exec ls -lad {} + 
-        cmd = f"find {quoted_path} -maxdepth 1 -exec ls -lad {{}} +"
-        logger.info(f"执行远程命令: {cmd}")
-        result = await conn.run(cmd)
-        
-        if result.exit_status != 0:
-            # 如果 find 命令不支持或报错，回退到标准的 ls -la
-            logger.warning(f"find 命令执行失败，回退到 ls -la. 错误: {result.stderr.strip()}")
-            fallback_cmd = f"ls -la {quoted_path}"
-            result = await conn.run(fallback_cmd)
-            if result.exit_status != 0:
-                stderr = (result.stderr or "").strip()
-                raise GuestPathNotFoundError(
-                    path,
-                    f"目录不存在或无法读取: {path}" + (f" ({stderr})" if stderr else ""),
-                )
-        
-        lines = result.stdout.splitlines()
-        for line in lines:
+        is_dir_probe = await conn.run(f"test -d {quoted_path}")
+        if is_dir_probe.exit_status != 0:
+            raise GuestPathNotFoundError(path, f"目录不存在或无法读取: {path}")
+
+        # 优先 ls（跟随 symlink 目录）；find -L 为次选
+        list_cmds = [
+            f"ls -la {quoted_list}",
+            f"find -L {quoted_path} -maxdepth 1 -exec ls -lad {{}} +",
+            f"ls -la {quoted_path}",
+        ]
+        result = None
+        for cmd in list_cmds:
+            logger.info("执行远程命令: %s", cmd)
+            result = await conn.run(cmd)
+            if result.exit_status == 0 and (result.stdout or "").strip():
+                break
+        if result is None or result.exit_status != 0:
+            stderr = ((result.stderr if result else "") or "").strip()
+            raise GuestPathNotFoundError(
+                path,
+                f"目录不存在或无法读取: {path}" + (f" ({stderr})" if stderr else ""),
+            )
+
+        for line in (result.stdout or "").splitlines():
             parsed = parse_ls_line(line, path)
-            if parsed:
-                # 排除当前目录自身 (除非是根目录本身)
-                norm_queried = posixpath.normpath(path)
-                norm_entry = posixpath.normpath(parsed["path"])
-                
-                # 排除 '.'、'..' 以及当前被查询目录本身
-                if parsed["name"] in (".", ".."):
-                    continue
-                if norm_queried != "/" and norm_queried == norm_entry:
-                    continue
-                
-                entries.append(parsed)
-                
-    # 按目录优先、字母升序对结果排序
+            if not parsed:
+                continue
+            norm_queried = posixpath.normpath(path)
+            norm_entry = posixpath.normpath(parsed["path"])
+            if parsed["name"] in (".", ".."):
+                continue
+            # 排除当前目录自身（含 ls 输出的 . 或路径本身）
+            if norm_queried != "/" and norm_queried == norm_entry:
+                continue
+            if parsed["name"] == posixpath.basename(norm_queried) and norm_entry == norm_queried:
+                continue
+            entries.append(parsed)
+
+        await _mark_symlink_dirs(conn, entries)
+
     entries.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
-    return entries
+    return [
+        {
+            "name": e["name"],
+            "path": e["path"],
+            "is_dir": e["is_dir"],
+            "size": e["size"],
+            "mtime": e["mtime"],
+        }
+        for e in entries
+    ]
 
 
 def normalize_guest_path(path: str) -> str:

@@ -12,11 +12,17 @@
               <input ref="hostUploadInputRef" type="file" class="hidden" multiple @change="handleHostUploadPick" />
             </div>
           </div>
-          <div class="mt-2 flex items-center gap-1 text-xs">
-            <UButton size="xs" variant="link" label="root" @click="navigateHost(hostRootPath || '/')" />
-            <template v-for="(p, i) in hostParts" :key="i">
-              <span class="text-dimmed">/</span>
-              <UButton size="xs" variant="link" :label="p.name" @click="navigateHost(p.path)" />
+          <div class="mt-2 flex flex-wrap items-center gap-x-0 font-mono text-xs">
+            <UButton
+              size="xs"
+              variant="link"
+              label="/"
+              class="min-w-0 px-0.5"
+              @click="navigateHost(hostRootPath || '/')"
+            />
+            <template v-for="(p, i) in hostParts" :key="p.path">
+              <UButton size="xs" variant="link" :label="p.name" class="min-w-0 px-0.5" @click="navigateHost(p.path)" />
+              <span v-if="i < hostParts.length - 1" class="text-dimmed select-none">/</span>
             </template>
           </div>
         </template>
@@ -33,8 +39,8 @@
               <tr
                 v-for="row in hostFiles"
                 :key="row.path"
-                class="cursor-pointer border-t border-muted hover:bg-muted/50"
-                :class="{ 'bg-primary/10': selectedHost?.path === row.path }"
+                class="table-row-interactive cursor-pointer border-t border-muted"
+                :class="{ 'bg-primary/10 ring-1 ring-inset ring-primary/20': selectedHost?.path === row.path }"
                 @click="selectedHost = row"
                 @dblclick="row.is_dir && enterHostDir(row.name)"
               >
@@ -46,7 +52,16 @@
               </tr>
             </tbody>
           </table>
-          <p v-if="!hostLoading && !hostFiles.length" class="py-8 text-center text-muted">空目录</p>
+          <EmptyState
+            v-if="!hostLoading && !hostFiles.length"
+            title="空目录"
+            description="当前宿主机路径下没有文件"
+            icon="i-lucide-folder-open"
+            size="sm"
+          />
+          <div v-else-if="hostLoading" class="flex justify-center py-10">
+            <UIcon name="i-lucide-loader-circle" class="size-5 animate-spin text-muted" />
+          </div>
         </div>
       </UCard>
 
@@ -68,11 +83,22 @@
               @click="createGuestFolder"
             />
           </div>
-          <div v-if="isGuestBrowseable" class="mt-2 flex items-center gap-1 text-xs">
-            <UButton size="xs" variant="link" label="root" @click="navigateGuest('/')" />
-            <template v-for="(p, i) in guestParts" :key="i">
-              <span class="text-dimmed">/</span>
-              <UButton size="xs" variant="link" :label="p.name" @click="navigateGuest(p.path)" />
+          <div
+            v-if="isGuestBrowseable"
+            class="mt-2 flex flex-wrap items-center gap-x-0 font-mono text-xs"
+            :title="guestCurrentPath"
+          >
+            <!-- 根路径显示为 /，避免 root//var 观感 -->
+            <UButton size="xs" variant="link" label="/" class="min-w-0 px-0.5" @click="navigateGuest('/')" />
+            <template v-for="(p, i) in guestParts" :key="p.path">
+              <UButton
+                size="xs"
+                variant="link"
+                :label="p.name"
+                class="min-w-0 px-0.5"
+                @click="navigateGuest(p.path)"
+              />
+              <span v-if="i < guestParts.length - 1" class="text-dimmed select-none">/</span>
             </template>
           </div>
         </template>
@@ -95,8 +121,8 @@
                 <tr
                   v-for="row in guestFiles"
                   :key="row.path"
-                  class="cursor-pointer border-t border-muted hover:bg-muted/50"
-                  :class="{ 'bg-primary/10': selectedGuest?.path === row.path }"
+                  class="table-row-interactive cursor-pointer border-t border-muted"
+                  :class="{ 'bg-primary/10 ring-1 ring-inset ring-primary/20': selectedGuest?.path === row.path }"
                   @click="selectedGuest = row"
                   @dblclick="row.is_dir && enterGuestDir(row.name)"
                 >
@@ -108,14 +134,34 @@
                 </tr>
               </tbody>
             </table>
-            <p v-if="!guestLoading && !guestFiles.length" class="py-8 text-center text-muted">{{ guestEmptyText }}</p>
+            <EmptyState
+              v-if="!guestLoading && !guestFiles.length"
+              :title="guestEmptyText"
+              description="双击目录进入，或使用下方按钮传输文件"
+              icon="i-lucide-hard-drive"
+              size="sm"
+            />
+            <div v-else-if="guestLoading" class="flex justify-center py-10">
+              <UIcon name="i-lucide-loader-circle" class="size-5 animate-spin text-muted" />
+            </div>
           </div>
           <div v-if="guestVfsMode === 'offline'" class="border-t border-muted px-3 py-2 text-xs text-dimmed">
             离线模式：浏览 rootfs.img 磁盘内容。
             <UButton size="xs" variant="link" color="success" label="启动虚拟机" @click="emit('start-instance')" />
           </div>
         </div>
-        <div v-else class="flex flex-1 items-center justify-center p-6 text-sm text-muted">无法浏览访客文件系统</div>
+        <div v-else class="flex flex-1 items-center justify-center p-6">
+          <EmptyState
+            title="无法浏览访客文件系统"
+            description="请等待实例就绪或启动虚拟机后重试"
+            icon="i-lucide-monitor-off"
+            size="sm"
+          >
+            <template #action>
+              <UButton size="sm" icon="i-lucide-play" label="启动虚拟机" @click="emit('start-instance')" />
+            </template>
+          </EmptyState>
+        </div>
       </UCard>
     </div>
 
@@ -152,6 +198,7 @@ import {
   transferFile,
 } from "@/api/endpoints";
 import type { FileEntry } from "@/api/types";
+import EmptyState from "@/components/EmptyState.vue";
 import { useTaskStore } from "@/stores/tasks";
 import { toastError, toastSuccess } from "@/utils/toast";
 
@@ -272,8 +319,13 @@ function navigateGuest(path: string) {
   void loadGuest();
 }
 function enterGuestDir(name: string) {
+  // 使用名称拼接；避免 path 已是绝对路径时重复拼接成 /var/var
   const base = guestCurrentPath.value.replace(/\/+$/, "") || "";
-  navigateGuest(base === "/" || base === "" ? `/${name}` : `${base}/${name}`);
+  const next =
+    !base || base === "/"
+      ? `/${name.replace(/^\/+/, "")}`
+      : `${base}/${name.replace(/^\/+/, "")}`;
+  navigateGuest(next.replace(/\/{2,}/g, "/"));
 }
 
 async function createHostFolder() {

@@ -1,23 +1,52 @@
 <template>
-  <div class="flex flex-col items-center justify-center py-16 px-6 text-center">
-    <div class="mb-4 flex size-12 items-center justify-center rounded-full bg-elevated text-muted">
-      <UIcon :name="icon" class="size-6" />
-    </div>
-    <h3 class="text-base font-semibold text-highlighted">{{ title }}</h3>
-    <p v-if="description" class="mt-1 max-w-sm text-sm text-muted">{{ description }}</p>
-    <div v-if="$slots.action" class="mt-4">
-      <slot name="action" />
-    </div>
-  </div>
+  <motion.div
+    :initial="{ opacity: 0, scale: 0.97 }"
+    :animate="{ opacity: 1, scale: 1 }"
+    :transition="{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }"
+    class="w-full"
+  >
+    <UEmpty
+      :icon="loading ? undefined : icon"
+      :loading="loading"
+      :title="title"
+      :description="description"
+      :variant="variant"
+      :size="size"
+      :class="rootClass"
+    >
+      <template v-if="$slots.action || actions?.length" #actions>
+        <slot name="action">
+          <UButton
+            v-for="(action, i) in actions"
+            :key="i"
+            v-bind="action"
+          />
+        </slot>
+      </template>
+    </UEmpty>
+  </motion.div>
 </template>
 
 <script setup lang="ts">
+import { motion } from "motion-v";
+import type { ButtonProps } from "@nuxt/ui";
+
 withDefaults(
   defineProps<{
     title: string;
     description?: string;
     icon?: string;
+    loading?: boolean;
+    variant?: "solid" | "outline" | "soft" | "subtle" | "naked";
+    size?: "xs" | "sm" | "md" | "lg" | "xl";
+    actions?: ButtonProps[];
+    rootClass?: string;
   }>(),
-  { icon: "i-lucide-inbox" }
+  {
+    icon: "i-lucide-inbox",
+    loading: false,
+    variant: "naked",
+    size: "md",
+  }
 );
 </script>

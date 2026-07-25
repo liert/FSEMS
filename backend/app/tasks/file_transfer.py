@@ -1,14 +1,16 @@
 # -*- coding: utf-8 -*-
-"""双栏文件传输：默认走 iot-tools（legacy scp + ELF 依赖），失败可回退 asyncssh。"""
+"""
+双栏文件传输：仅通过 iot-tools（系统 scp/ssh，可选 sshpass）。
 
-import asyncio
-import contextlib
+iot-tools 本身不依赖 asyncssh；asyncssh 仅用于 FSEMS 其它能力
+（在线 guest 目录列表等），不参与本任务。
+"""
+
 import hashlib
 import logging
 import posixpath
 from pathlib import Path
 
-import asyncssh
 import redis.asyncio as aioredis
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -19,7 +21,6 @@ from app.core.database import SessionLocal
 from app.models.instance import Instance
 from app.models.task import Task
 from app.services import iot_tools_client
-from app.services.ssh_service import get_ssh_connection
 
 logger = logging.getLogger(__name__)
 
@@ -49,20 +50,8 @@ async def _set_task_progress(task_id: str, progress: int, status: str | None = N
         await session.commit()
 
 
-def _estimate_transfer_total(direction: str, src: str, dest: str) -> int | None:
-    if direction == "host_to_guest":
-        path = Path(src)
-    else:
-        path = Path(dest)
-    if path.is_file():
-        try:
-            return path.stat().st_size
-        except OSError:
-            return None
-    return None
-
-
 def _progress_from_bytes(bytes_transferred: int, total_bytes: int | None) -> int:
+    """保留供单元测试 / 后续进度增强使用。"""
     if total_bytes and total_bytes > 0:
         return min(99, int(bytes_transferred * 100 / total_bytes))
     if bytes_transferred <= 0:
@@ -79,17 +68,20 @@ async def _transfer_via_iot_tools(
     port: int,
     task_id: str,
 ) -> None:
-    """使用 iot-tools 完成传输。"""
-
     async def bump(pct: int) -> None:
         await _set_task_progress(task_id, pct)
 
     await bump(10)
 
     if direction == "host_to_guest":
-        # dest 可能是完整远端文件路径
         search_root = Path(src).parent
-        logger.info("iot-tools push: %s -> %s:%s (search_root=%s)", src, host, dest, search_root)
+        logger.info(
+            "iot-tools push: %s -> %s:%s (search_root=%s)",
+            src,
+            host,
+            dest,
+            search_root,
+        )
         await iot_tools_client.scp_host_to_guest(
             src,
             host,
@@ -111,62 +103,6 @@ async def _transfer_via_iot_tools(
         raise ValueError(f"不支持的传输方向: {direction}")
 
 
-async def _transfer_via_asyncssh(
-    direction: str,
-    src: str,
-    dest: str,
-    *,
-    host: str,
-    port: int,
-    task_id: str,
-) -> None:
-    """asyncssh 回退路径（iot-tools 不可用或失败时）。"""
-    estimated_total = _estimate_transfer_total(direction, src, dest)
-    progress_state = {"bytes": 0, "total": estimated_total, "last_pct": 5, "done": False}
-
-    async def progress_poller():
-        while not progress_state["done"]:
-            pct = _progress_from_bytes(progress_state["bytes"], progress_state["total"])
-            if pct >= progress_state["last_pct"] + 3:
-                progress_state["last_pct"] = pct
-                await _set_task_progress(task_id, pct)
-            await asyncio.sleep(0.4)
-
-    def progress_handler(_srcpath, _dstpath, bytes_transferred, total_bytes):
-        progress_state["bytes"] = bytes_transferred
-        if total_bytes:
-            progress_state["total"] = total_bytes
-
-    poller_task = asyncio.create_task(progress_poller())
-    try:
-        async with await get_ssh_connection(host, port) as conn:
-            if direction == "host_to_guest":
-                logger.info("asyncssh SCP: 宿主机 %s -> 访客机 %s", src, dest)
-                await asyncssh.scp(
-                    src,
-                    (conn, dest),
-                    recurse=True,
-                    use_sftp=False,
-                    progress_handler=progress_handler,
-                )
-            elif direction == "guest_to_host":
-                logger.info("asyncssh SCP: 访客机 %s -> 宿主机 %s", src, dest)
-                await asyncssh.scp(
-                    (conn, src),
-                    dest,
-                    recurse=True,
-                    use_sftp=False,
-                    progress_handler=progress_handler,
-                )
-            else:
-                raise ValueError(f"不支持的传输方向: {direction}")
-    finally:
-        progress_state["done"] = True
-        poller_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await poller_task
-
-
 async def async_file_transfer(task_id: str, direction: str, src: str, dest: str):
     async with SessionLocal() as session:
         result = await session.execute(select(Task).where(Task.id == task_id))
@@ -180,6 +116,13 @@ async def async_file_transfer(task_id: str, direction: str, src: str, dest: str)
         await session.commit()
 
         try:
+            if not iot_tools_client.iot_tools_available():
+                raise RuntimeError(
+                    "iot-tools 不可用（当前解释器无法 import iot_tools）。"
+                    f"请用同一虚拟环境安装: {__import__('sys').executable} -m pip install -e "
+                    f"{__import__('pathlib').Path(__file__).resolve().parents[3] / 'third_party' / 'iot-tools'}"
+                )
+
             result = await session.execute(
                 select(Instance)
                 .options(selectinload(Instance.template))
@@ -193,27 +136,9 @@ async def async_file_transfer(task_id: str, direction: str, src: str, dest: str)
             host = instance.guest_ssh_host or template.guest_ssh_host
             port = int(template.guest_ssh_port or 22)
 
-            use_iot = iot_tools_client.iot_tools_available()
-            if use_iot:
-                try:
-                    await _transfer_via_iot_tools(
-                        direction, src, dest, host=host, port=port, task_id=task_id
-                    )
-                except Exception as iot_err:
-                    logger.warning(
-                        "iot-tools 传输失败，回退 asyncssh: %s",
-                        iot_err,
-                        exc_info=True,
-                    )
-                    await _set_task_progress(task_id, 15)
-                    await _transfer_via_asyncssh(
-                        direction, src, dest, host=host, port=port, task_id=task_id
-                    )
-            else:
-                logger.warning("iot-tools 不可用，使用 asyncssh SCP")
-                await _transfer_via_asyncssh(
-                    direction, src, dest, host=host, port=port, task_id=task_id
-                )
+            await _transfer_via_iot_tools(
+                direction, src, dest, host=host, port=port, task_id=task_id
+            )
 
             if direction == "host_to_guest":
                 await invalidate_cache(instance.id, dest)
@@ -223,7 +148,7 @@ async def async_file_transfer(task_id: str, direction: str, src: str, dest: str)
             task.status = "SUCCESS"
             task.progress = 100
             await session.commit()
-            logger.info("文件传输任务 %s 成功完成", task_id)
+            logger.info("文件传输任务 %s 成功完成 (iot-tools)", task_id)
 
         except Exception as e:
             logger.exception("文件传输任务 %s 执行出错", task_id)
@@ -237,5 +162,7 @@ async def async_file_transfer(task_id: str, direction: str, src: str, dest: str)
 
 @celery_app.task(name="app.tasks.file_transfer.run_file_transfer")
 def run_file_transfer(task_id: str, direction: str, src: str, dest: str):
-    logger.info("Celery 接收到传输任务: %s, 方向: %s", task_id, direction)
+    import asyncio
+
+    logger.info("Celery 接收到传输任务: %s, 方向: %s (iot-tools only)", task_id, direction)
     asyncio.run(async_file_transfer(task_id, direction, src, dest))

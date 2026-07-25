@@ -8,9 +8,185 @@
 
 :root {
   --ui-radius: 0.5rem;
+  /* 全局滚动条（跟随 Nuxt UI 语义色） */
+  --fsems-scrollbar-size: 8px;
+  --fsems-scrollbar-radius: 999px;
+  --fsems-scrollbar-track: transparent;
+  --fsems-scrollbar-thumb: color-mix(in oklab, var(--ui-border) 85%, transparent);
+  --fsems-scrollbar-thumb-hover: color-mix(in oklab, var(--ui-text-muted) 55%, transparent);
+  --fsems-scrollbar-thumb-active: color-mix(in oklab, var(--ui-primary) 45%, var(--ui-border));
 }
 
-/* xterm 终端区域 */
-.xterm-viewport {
-  overflow-y: auto !important;
+.dark {
+  --fsems-scrollbar-thumb: color-mix(in oklab, var(--ui-border) 90%, transparent);
+  --fsems-scrollbar-thumb-hover: color-mix(in oklab, var(--ui-text-muted) 65%, transparent);
+  --fsems-scrollbar-thumb-active: color-mix(in oklab, var(--ui-primary) 50%, var(--ui-border));
+}
+
+/* —— 全局统一滚动条（Firefox + Chromium/WebKit） —— */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--fsems-scrollbar-thumb) var(--fsems-scrollbar-track);
+}
+
+*::-webkit-scrollbar {
+  width: var(--fsems-scrollbar-size);
+  height: var(--fsems-scrollbar-size);
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--fsems-scrollbar-track);
+  border-radius: var(--fsems-scrollbar-radius);
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: var(--fsems-scrollbar-thumb);
+  border-radius: var(--fsems-scrollbar-radius);
+  border: 2px solid transparent;
+  background-clip: content-box;
+  transition: background-color 0.15s ease;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--fsems-scrollbar-thumb-hover);
+}
+
+*::-webkit-scrollbar-thumb:active {
+  background-color: var(--fsems-scrollbar-thumb-active);
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* 深色终端区域：更亮一点的 thumb，便于辨认 */
+.term-shell,
+.term-shell * {
+  --fsems-scrollbar-thumb: color-mix(in oklab, #94a3b8 40%, transparent);
+  --fsems-scrollbar-thumb-hover: color-mix(in oklab, #38bdf8 55%, transparent);
+  --fsems-scrollbar-thumb-active: color-mix(in oklab, #38bdf8 75%, transparent);
+  scrollbar-color: var(--fsems-scrollbar-thumb) transparent;
+}
+
+/* Prefer reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/*
+ * 详情元数据行：中文标签与英文/等宽路径垂直居中对齐。
+ * 问题根因：标签 text-sm + 无衬线，值 font-mono text-xs → 字号/字框/基线不一致。
+ * 统一字号、行高，并用 flex items-center 对齐内容盒。
+ */
+.meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: 1.5rem; /* 24px，容纳 xs 图标按钮 */
+  font-size: 0.875rem; /* text-sm */
+  line-height: 1.25rem; /* leading-5，中英同一行高 */
+}
+
+.meta-label {
+  flex-shrink: 0;
+  color: var(--ui-text-muted);
+  font-size: inherit;
+  line-height: inherit;
+  /* CJK 与 Latin 混排时略稳一点的垂直度量 */
+  font-feature-settings: "tnum" 0;
+}
+
+.meta-value {
+  min-width: 0;
+  text-align: right;
+  font-size: inherit;
+  line-height: inherit;
+  color: var(--ui-text-highlighted, var(--ui-text));
+}
+
+.meta-mono {
+  font-family: var(--font-mono);
+  /* 与标签同字号，避免 text-xs 造成视觉下沉/上浮 */
+  font-size: inherit;
+  line-height: inherit;
+  letter-spacing: 0;
+}
+
+.meta-action {
+  /* 行内小图标按钮（容量编辑 / RootFS 源路径） */
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  height: 1.125rem !important; /* 18px */
+  width: 1.125rem !important;
+  min-height: 1.125rem !important;
+  min-width: 1.125rem !important;
+  padding: 0 !important;
+}
+
+.meta-action :deep(svg),
+.meta-action :deep(.iconify) {
+  width: 0.75rem !important; /* 12px */
+  height: 0.75rem !important;
+}
+
+/* Smooth interactive surfaces */
+.table-row-interactive {
+  transition: background-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.table-row-interactive:hover {
+  background-color: color-mix(in oklab, var(--ui-bg-muted) 55%, transparent);
+}
+
+/* 列表操作按钮轻量交互（删除等） */
+.action-btn {
+  transition:
+    transform 0.15s cubic-bezier(0.16, 1, 0.3, 1),
+    background-color 0.15s ease,
+    opacity 0.15s ease;
+}
+
+.action-btn:not(:disabled):hover {
+  transform: scale(1.08);
+}
+
+.action-btn:not(:disabled):active {
+  transform: scale(0.92);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .action-btn:hover,
+  .action-btn:active {
+    transform: none;
+  }
+}
+
+/* In-panel content enter — always ends visible; never stuck at opacity 0 */
+.page-content {
+  animation: page-content-in 0.22s ease both;
+}
+
+@keyframes page-content-in {
+  from {
+    opacity: 0.01;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-content {
+    animation: none;
+  }
 }

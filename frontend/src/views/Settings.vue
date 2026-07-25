@@ -15,30 +15,51 @@
     </template>
 
     <template #body>
-      <div class="flex h-full min-h-0 overflow-hidden rounded-lg border border-default bg-elevated/30">
-        <aside class="flex w-52 shrink-0 flex-col gap-1 overflow-y-auto border-r border-default p-3">
+      <PageMotion>
+        <div
+          v-if="loading && !system"
+          class="flex h-full items-center justify-center"
+        >
+          <LoadingState description="正在加载系统配置…" />
+        </div>
+        <ErrorState
+          v-else-if="loadError && !system"
+          :description="loadError"
+          :retry="() => loadSystem()"
+        />
+        <div
+          v-else
+          class="flex h-full min-h-0 overflow-hidden rounded-xl border border-default bg-elevated/30 ring-1 ring-default/50"
+        >
+        <aside class="flex w-44 shrink-0 flex-col gap-1 overflow-y-auto border-r border-default p-2.5 sm:w-52 sm:p-3">
           <button
             v-for="tab in tabs"
             :key="tab.id"
             type="button"
-            class="flex items-start gap-2 rounded-lg px-3 py-2.5 text-left transition-colors"
+            class="relative flex items-start gap-2 rounded-lg px-3 py-2.5 text-left transition-all duration-150"
             :class="
               activeTab === tab.id
-                ? 'bg-primary/10 text-highlighted ring-1 ring-primary/30'
+                ? 'bg-primary/10 text-highlighted ring-1 ring-primary/30 shadow-sm'
                 : 'text-muted hover:bg-muted hover:text-default'
             "
             @click="activeTab = tab.id"
           >
-            <UIcon :name="tab.icon" class="mt-0.5 size-4 shrink-0" />
-            <span>
+            <UIcon :name="tab.icon" class="mt-0.5 size-4 shrink-0" :class="activeTab === tab.id ? 'text-primary' : ''" />
+            <span class="min-w-0">
               <span class="block text-sm font-semibold">{{ tab.label }}</span>
-              <span class="block text-xs text-dimmed">{{ tab.desc }}</span>
+              <span class="hidden text-xs text-dimmed sm:block">{{ tab.desc }}</span>
             </span>
           </button>
         </aside>
 
         <div class="flex min-w-0 flex-1 flex-col">
-          <div class="min-h-0 flex-1 overflow-y-auto p-5">
+          <div class="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+            <motion.div
+              :key="activeTab"
+              :initial="{ opacity: 0, x: 8 }"
+              :animate="{ opacity: 1, x: 0 }"
+              :transition="{ duration: 0.2 }"
+            >
             <div v-if="activeTab === 'account'" class="max-w-md space-y-4">
               <h2 class="text-lg font-semibold text-highlighted">账户</h2>
               <UFormField label="管理员用户名">
@@ -117,14 +138,16 @@
                 </UFormField>
               </div>
             </div>
+            </motion.div>
           </div>
 
-          <div class="flex shrink-0 justify-end gap-2 border-t border-default px-5 py-3">
-            <UButton color="neutral" variant="soft" label="放弃修改并重新加载" :loading="loading" @click="loadSystem" />
-            <UButton label="保存设置" :loading="saving" @click="saveSystem" />
+          <div class="flex shrink-0 flex-wrap justify-end gap-2 border-t border-default bg-elevated/40 px-4 py-3 sm:px-5">
+            <UButton color="neutral" variant="soft" label="放弃修改并重新加载" icon="i-lucide-rotate-ccw" :loading="loading" @click="loadSystem" />
+            <UButton label="保存设置" icon="i-lucide-save" :loading="saving" @click="saveSystem" />
           </div>
         </div>
       </div>
+      </PageMotion>
     </template>
   </UDashboardPanel>
 </template>
@@ -132,12 +155,16 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
+import { motion } from "motion-v";
 import {
   fetchSystemSettings,
   updateSystemSettings,
   type SystemSettings,
   type SystemSettingsUpdate,
 } from "@/api/endpoints";
+import ErrorState from "@/components/ErrorState.vue";
+import LoadingState from "@/components/LoadingState.vue";
+import PageMotion from "@/components/PageMotion.vue";
 import { useAuthStore } from "@/stores/auth";
 import { toastError, toastSuccess, toastWarning } from "@/utils/toast";
 
@@ -155,6 +182,7 @@ const auth = useAuthStore();
 const router = useRouter();
 const activeTab = ref<TabId>("account");
 const loading = ref(false);
+const loadError = ref("");
 const saving = ref(false);
 const system = ref<SystemSettings | null>(null);
 
@@ -230,8 +258,10 @@ async function loadSystem() {
   try {
     system.value = await fetchSystemSettings();
     applySystemToForm(system.value);
+    loadError.value = "";
   } catch (e: unknown) {
-    toastError(e instanceof Error ? e.message : "加载系统设置失败");
+    loadError.value = e instanceof Error ? e.message : "加载系统设置失败";
+    toastError(loadError.value);
   } finally {
     loading.value = false;
   }

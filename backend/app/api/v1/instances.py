@@ -229,18 +229,24 @@ async def console_ws(websocket: WebSocket, instance_id: str, token: str | None =
             if message.get("type") == "websocket.disconnect":
                 break
             if "bytes" in message and message["bytes"]:
+                # 终端键盘输入必须用二进制帧写入串口
                 cb.write_bytes(message["bytes"])
-            elif "text" in message:
+            elif "text" in message and message["text"] is not None:
                 text = message["text"]
                 if text == "ping":
                     await websocket.send_text("pong")
-                else:
+                    continue
+                # 控制帧：resize 等 JSON
+                if text.startswith("{") and text.endswith("}"):
                     try:
                         payload = json.loads(text)
                         if payload.get("type") == "resize":
                             cb.write_resize(payload.get("cols", 80), payload.get("rows", 24))
+                            continue
                     except (json.JSONDecodeError, TypeError, ValueError):
                         pass
+                # 兼容旧客户端：纯文本输入也写入串口
+                cb.write_bytes(text.encode("utf-8", errors="replace"))
     except WebSocketDisconnect:
         pass
     finally:

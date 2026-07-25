@@ -79,22 +79,50 @@ async def _is_mounted(mount_point: Path) -> bool:
 
 
 def resolve_offline_guest_path(mount_root: Path, guest_path: str) -> Path:
-    """将访客机 POSIX 路径映射到挂载点或解压目录下的宿主机路径。"""
+    """
+    将访客机 POSIX 路径映射到挂载点下的宿主机路径。
+    对路径上的符号链接按段解析，支持链接到目录（OpenWrt /lib -> usr/lib）。
+    """
     mount_resolved = mount_root.resolve()
     normalized = posixpath.normpath(guest_path.strip() or "/")
     if normalized == "/":
         target = mount_resolved
     else:
-        relative = normalized.lstrip("/")
-        target = (mount_resolved / relative).resolve()
+        # 逐段拼接并跟随符号链接（相对链接按当前目录解析）
+        target = mount_resolved
+        for part in normalized.strip("/").split("/"):
+            if not part or part == ".":
+                continue
+            if part == "..":
+                if target == mount_resolved:
+                    raise GuestPathNotFoundError(guest_path, "Path outside guest root")
+                target = target.parent
+                continue
+            nxt = target / part
+            try:
+                if nxt.is_symlink():
+                    # Path.is_dir() 会跟随链接；先检查链接本身
+                    if nxt.is_dir():
+                        target = nxt.resolve()
+                    else:
+                        target = nxt
+                else:
+                    target = nxt
+            except OSError:
+                target = nxt
 
     try:
-        target.relative_to(mount_resolved)
+        # 允许 resolve 后仍在 mount 树内（跟随链接后的真实路径）
+        real = target.resolve(strict=False)
+        real.relative_to(mount_resolved)
+        target = real
     except ValueError as exc:
         raise GuestPathNotFoundError(
             guest_path,
             "Path outside guest root",
         ) from exc
+    except OSError:
+        pass
 
     if not target.exists():
         raise GuestPathNotFoundError(guest_path, f"目录不存在或无法读取: {guest_path}")
@@ -104,6 +132,7 @@ def resolve_offline_guest_path(mount_root: Path, guest_path: str) -> Path:
 
 def list_offline_guest_directory(mount_root: Path, guest_path: str) -> list[dict]:
     target = resolve_offline_guest_path(mount_root, guest_path)
+    # is_dir() 跟随符号链接，链接到目录时可进入
     if not target.is_dir():
         raise GuestPathNotFoundError(guest_path, f"Not a directory: {guest_path}")
 
@@ -141,29 +170,34 @@ def _parse_debugfs_mtime(date_s: str | None, time_s: str | None) -> int:
     return 0
 
 
-def _parse_debugfs_ls_line(line: str) -> tuple[str, bool, int, int] | None:
+def _parse_debugfs_ls_line(line: str) -> tuple[str, bool, int, int, bool, str | None] | None:
     """
     解析 debugfs ls -l 一行。
-    返回 (name, is_dir, size, mtime_unix)。
+    返回 (name, is_dir, size, mtime_unix, is_link, link_target)。
+    is_dir 仅表示真实目录；指向目录的符号链接在后续 _enrich_symlink_dirs 中处理。
     """
     match = _DEBUGFS_LS.match(line.strip())
     if not match:
         return None
-    # debugfs 权限位是八进制字面量
     mode = int(match.group(1), 8)
     size = int(match.group(2))
     mtime = _parse_debugfs_mtime(match.group(3), match.group(4))
     name = match.group(5).strip()
     if name in (".", ".."):
         return None
+    link_target: str | None = None
     if " -> " in name:
-        name = name.split(" -> ", 1)[0].strip()
+        name, link_target = name.split(" -> ", 1)
+        name = name.strip()
+        link_target = link_target.strip()
     file_type = mode & _S_IFMT
+    is_link = file_type == _S_IFLNK
     is_dir = file_type == _S_IFDIR
-    return name, is_dir, size, mtime
+    return name, is_dir, size, mtime, is_link, link_target
 
 
-def _list_debugfs_guest_directory_sync(drive_path: Path, guest_path: str) -> list[dict]:
+def _debugfs_ls_raw(drive_path: Path, guest_path: str) -> list[dict]:
+    """对 debugfs 路径做一次 ls -l，返回含 is_link/link_target 的条目。"""
     debugfs_bin = _tool_path("debugfs")
     if not debugfs_bin:
         raise RuntimeError("debugfs 未安装")
@@ -185,7 +219,7 @@ def _list_debugfs_guest_directory_sync(drive_path: Path, guest_path: str) -> lis
         parsed = _parse_debugfs_ls_line(line)
         if not parsed:
             continue
-        name, is_dir, size, mtime = parsed
+        name, is_dir, size, mtime, is_link, link_target = parsed
         if parent_guest == "/":
             entry_path = f"/{name}"
         else:
@@ -197,9 +231,112 @@ def _list_debugfs_guest_directory_sync(drive_path: Path, guest_path: str) -> lis
                 "is_dir": is_dir,
                 "size": 0 if is_dir else size,
                 "mtime": mtime,
+                "is_link": is_link,
+                "link_target": link_target,
             }
         )
     return entries
+
+
+def _resolve_link_target(parent: str, link_target: str) -> str:
+    if link_target.startswith("/"):
+        return posixpath.normpath(link_target)
+    return posixpath.normpath(posixpath.join(parent, link_target))
+
+
+def _debugfs_path_is_dir(drive_path: Path, guest_path: str, *, depth: int = 0) -> bool:
+    """判断镜像内路径是否为目录（跟随符号链接，有限深度）。"""
+    if depth > 12:
+        return False
+    normalized = posixpath.normpath(guest_path.strip() or "/")
+    if normalized == "/":
+        return True
+    parent = posixpath.dirname(normalized) or "/"
+    name = posixpath.basename(normalized)
+    try:
+        entries = _debugfs_ls_raw(drive_path, parent)
+    except (GuestPathNotFoundError, RuntimeError):
+        return False
+    for e in entries:
+        if e["name"] != name:
+            continue
+        if e["is_dir"]:
+            return True
+        if e.get("is_link") and e.get("link_target"):
+            target = _resolve_link_target(parent, e["link_target"])
+            return _debugfs_path_is_dir(drive_path, target, depth=depth + 1)
+        return False
+    return False
+
+
+def _enrich_debugfs_symlink_dirs(drive_path: Path, parent_guest: str, entries: list[dict]) -> None:
+    """将指向目录的符号链接标为 is_dir（OpenWrt: lib -> usr/lib）。"""
+    for e in entries:
+        if e.get("is_dir") or not e.get("is_link") or not e.get("link_target"):
+            continue
+        target = _resolve_link_target(parent_guest, e["link_target"])
+        if _debugfs_path_is_dir(drive_path, target):
+            e["is_dir"] = True
+            e["size"] = 0
+
+
+def _resolve_debugfs_guest_path(drive_path: Path, guest_path: str, *, depth: int = 0) -> str:
+    """
+    将访客路径中的符号链接展开为 debugfs 可 ls 的真实目录路径。
+    例如 /lib -> /usr/lib。
+    """
+    normalized = posixpath.normpath(guest_path.strip() or "/")
+    if normalized == "/" or depth > 12:
+        return normalized
+
+    parts = [p for p in normalized.split("/") if p]
+    cur = "/"
+    for i, part in enumerate(parts):
+        parent = cur
+        try:
+            entries = _debugfs_ls_raw(drive_path, parent)
+        except (GuestPathNotFoundError, RuntimeError):
+            return normalized
+        ent = next((e for e in entries if e["name"] == part), None)
+        if ent is None:
+            return normalized
+        if ent.get("is_link") and ent.get("link_target"):
+            target = _resolve_link_target(parent, ent["link_target"])
+            # 链接目标 + 剩余路径段
+            rest = parts[i + 1 :]
+            joined = target if not rest else posixpath.join(target, *rest)
+            return _resolve_debugfs_guest_path(drive_path, joined, depth=depth + 1)
+        cur = posixpath.join(parent, part) if parent != "/" else f"/{part}"
+    return cur
+
+
+def _list_debugfs_guest_directory_sync(drive_path: Path, guest_path: str) -> list[dict]:
+    """debugfs 列举；自动跟随路径上的符号链接目录。"""
+    normalized = posixpath.normpath(guest_path.strip() or "/")
+    resolved = _resolve_debugfs_guest_path(drive_path, normalized)
+    entries = _debugfs_ls_raw(drive_path, resolved)
+    _enrich_debugfs_symlink_dirs(drive_path, resolved, entries)
+
+    # 对外 path 使用用户请求的逻辑路径前缀，进入子目录时仍用 resolve 保证可列
+    # 条目 path 挂在用户当前 guest_path 下，便于面包屑
+    parent_guest = normalized
+    out: list[dict] = []
+    for e in entries:
+        name = e["name"]
+        if parent_guest == "/":
+            entry_path = f"/{name}"
+        else:
+            entry_path = posixpath.join(parent_guest, name)
+        out.append(
+            {
+                "name": name,
+                "path": entry_path,
+                "is_dir": e["is_dir"],
+                "size": e["size"],
+                "mtime": e["mtime"],
+            }
+        )
+    return out
 
 
 async def list_guest_offline_directory(

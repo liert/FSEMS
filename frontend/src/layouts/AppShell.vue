@@ -3,12 +3,21 @@
     <UDashboardSidebar
       collapsible
       resizable
-      :ui="{ root: 'bg-elevated/50 border-default' }"
+      :ui="{
+        root: 'bg-elevated/40 border-default backdrop-blur-sm',
+        header: 'border-b border-default/60',
+        footer: 'border-t border-default/60',
+      }"
     >
       <template #header="{ collapsed }">
-        <div class="flex items-center gap-2 px-1 py-1">
+        <motion.div
+          class="flex items-center gap-2.5 px-1 py-1"
+          :initial="{ opacity: 0, x: -8 }"
+          :animate="{ opacity: 1, x: 0 }"
+          :transition="{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }"
+        >
           <div
-            class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary text-inverted text-xs font-bold"
+            class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary text-inverted text-xs font-bold shadow-sm shadow-primary/30"
           >
             FS
           </div>
@@ -16,7 +25,7 @@
             <p class="text-sm font-semibold text-highlighted truncate">FSEMS</p>
             <p class="text-xs text-dimmed truncate">Firmware Sandbox EMS</p>
           </div>
-        </div>
+        </motion.div>
       </template>
 
       <template #default="{ collapsed }">
@@ -34,15 +43,19 @@
             color="neutral"
             variant="ghost"
             block
-            class="justify-start"
+            class="justify-start transition-colors"
             :class="collapsed ? 'px-0 justify-center' : ''"
           >
-            <UAvatar :text="userInitial" size="sm" class="shrink-0" />
+            <UAvatar :text="userInitial" size="sm" class="shrink-0 ring-1 ring-default" />
             <span v-if="!collapsed" class="truncate text-left flex-1">
               <span class="block text-sm font-medium text-default">{{ displayName }}</span>
               <span class="block text-xs text-dimmed">管理员</span>
             </span>
-            <UIcon v-if="!collapsed" name="i-lucide-chevrons-up-down" class="size-4 text-dimmed shrink-0" />
+            <UIcon
+              v-if="!collapsed"
+              name="i-lucide-chevrons-up-down"
+              class="size-4 text-dimmed shrink-0"
+            />
           </UButton>
         </UDropdownMenu>
       </template>
@@ -56,6 +69,7 @@
 import { computed } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import type { DropdownMenuItem, NavigationMenuItem } from "@nuxt/ui";
+import { motion } from "motion-v";
 import { useAuthStore } from "@/stores/auth";
 import { useUiStore } from "@/stores/ui";
 

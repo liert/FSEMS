@@ -11,149 +11,163 @@
               v-model="searchQuery"
               icon="i-lucide-search"
               placeholder="搜索名称或 ID…"
-              class="w-48 sm:w-56"
+              class="w-40 sm:w-56"
+              :ui="{ base: 'transition-shadow focus-within:ring-primary/40' }"
             />
-            <UButton icon="i-lucide-plus" label="新建实例" @click="showCreate = true" />
+            <UButton icon="i-lucide-plus" label="新建实例" class="hidden sm:inline-flex" @click="showCreate = true" />
+            <UButton icon="i-lucide-plus" square class="sm:hidden" @click="showCreate = true" />
             <TaskCenter />
-            <UButton
-              color="neutral"
-              variant="ghost"
-              square
-              :icon="ui.theme === 'dark' ? 'i-lucide-sun' : 'i-lucide-moon'"
-              @click="ui.toggleTheme()"
-            />
+            <UTooltip :text="ui.theme === 'dark' ? '浅色主题' : '深色主题'">
+              <UButton
+                color="neutral"
+                variant="ghost"
+                square
+                :icon="ui.theme === 'dark' ? 'i-lucide-sun' : 'i-lucide-moon'"
+                @click="ui.toggleTheme()"
+              />
+            </UTooltip>
           </div>
         </template>
       </UDashboardNavbar>
     </template>
 
     <template #body>
-      <div class="flex h-full min-h-0 flex-col gap-4">
+      <PageMotion class="gap-4">
         <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <UCard :ui="{ body: 'p-4' }">
-            <p class="text-xs text-muted">实例总数</p>
-            <p class="mt-1 text-2xl font-semibold text-primary">{{ instances.length }}</p>
-          </UCard>
-          <UCard :ui="{ body: 'p-4' }">
-            <p class="text-xs text-muted">运行中</p>
-            <p class="mt-1 text-2xl font-semibold text-success">{{ runningCount }}</p>
-          </UCard>
-          <UCard :ui="{ body: 'p-4' }">
-            <p class="text-xs text-muted">已停止</p>
-            <p class="mt-1 text-2xl font-semibold text-muted">{{ stoppedCount }}</p>
-          </UCard>
-          <UCard :ui="{ body: 'p-4' }">
-            <p class="text-xs text-muted">过渡状态</p>
-            <p class="mt-1 text-2xl font-semibold text-warning">{{ transitionalCount }}</p>
-          </UCard>
+          <StatCard label="实例总数" :value="instances.length" icon="i-lucide-server" tone="primary" :index="0" />
+          <StatCard label="运行中" :value="runningCount" icon="i-lucide-activity" tone="success" :index="1" />
+          <StatCard label="已停止" :value="stoppedCount" icon="i-lucide-circle-pause" tone="muted" :index="2" />
+          <StatCard label="过渡状态" :value="transitionalCount" icon="i-lucide-loader" tone="warning" :index="3" />
         </div>
 
-        <UCard class="flex min-h-0 flex-1 flex-col overflow-hidden" :ui="{ body: 'flex-1 min-h-0 p-0' }">
-          <div class="h-full min-h-0 overflow-auto">
-            <table class="w-full text-sm">
-              <thead class="sticky top-0 z-10 border-b border-default bg-elevated text-left text-muted">
-                <tr>
-                  <th class="px-4 py-3 font-medium">名称</th>
-                  <th class="px-4 py-3 font-medium">状态</th>
-                  <th class="px-4 py-3 font-medium">SSH 地址</th>
-                  <th class="px-4 py-3 text-right font-medium">操作</th>
-                </tr>
-              </thead>
-              <tbody v-if="filteredInstances.length">
-                <tr
-                  v-for="row in filteredInstances"
-                  :key="row.id"
-                  class="border-b border-muted hover:bg-muted/50"
-                >
-                  <td class="px-4 py-3 font-medium text-highlighted">{{ row.name }}</td>
-                  <td class="px-4 py-3"><StatusBadge :status="row.status" /></td>
-                  <td class="px-4 py-3 font-mono text-xs text-toned">{{ row.guest_ssh_host || "—" }}</td>
-                  <td class="px-4 py-3">
-                    <div class="flex items-center justify-end gap-1">
-                      <UButton
-                        icon="i-lucide-play"
-                        color="primary"
-                        variant="ghost"
-                        size="sm"
-                        square
-                        :disabled="
-                          deletingId !== null ||
-                          row.status === 'RUNNING' ||
-                          row.status === 'STARTING' ||
-                          row.status === 'STOPPING'
-                        "
-                        @click="doAction(row.id, 'start')"
-                      />
-                      <UButton
-                        icon="i-lucide-square"
-                        color="error"
-                        variant="ghost"
-                        size="sm"
-                        square
-                        :disabled="
-                          deletingId !== null ||
-                          row.status === 'STOPPED' ||
-                          row.status === 'STOPPING'
-                        "
-                        @click="doAction(row.id, 'stop')"
-                      />
-                      <UButton
-                        icon="i-lucide-refresh-cw"
-                        color="warning"
-                        variant="ghost"
-                        size="sm"
-                        square
-                        :disabled="deletingId !== null"
-                        @click="doAction(row.id, 'reset')"
-                      />
-                      <UButton
-                        icon="i-lucide-trash-2"
-                        color="error"
-                        variant="ghost"
-                        size="sm"
-                        square
-                        :loading="deletingId === row.id"
-                        :disabled="
-                          deletingId !== null ||
-                          row.status === 'RUNNING' ||
-                          row.status === 'STARTING' ||
-                          row.status === 'STOPPING'
-                        "
-                        @click="deleteInst(row)"
-                      />
-                      <UButton
-                        size="sm"
-                        variant="soft"
-                        label="进入管理"
-                        :disabled="deletingId === row.id"
-                        @click="manageInstance(row.id)"
-                      />
-                    </div>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-            <EmptyState
-              v-if="!loading && !filteredInstances.length"
-              title="还没有实例"
-              description="创建第一个 QEMU 固件实例，开始串口调试与文件传输实验。"
-            >
-              <template #action>
-                <UButton label="新建实例" icon="i-lucide-plus" @click="showCreate = true" />
-              </template>
-            </EmptyState>
-            <div v-if="loading" class="flex justify-center py-12">
-              <UIcon name="i-lucide-loader-circle" class="size-6 animate-spin text-muted" />
+        <UCard
+          class="flex min-h-0 flex-1 flex-col overflow-hidden ring-1 ring-default"
+          :ui="{ body: 'flex-1 min-h-0 p-0', header: 'py-3' }"
+        >
+          <template #header>
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="flex items-center gap-2">
+                <span class="text-sm font-semibold text-highlighted">实例列表</span>
+                <UBadge v-if="filteredInstances.length" color="neutral" variant="subtle" size="sm">
+                  {{ filteredInstances.length }}
+                </UBadge>
+              </div>
+              <UButton
+                color="neutral"
+                variant="ghost"
+                size="sm"
+                icon="i-lucide-refresh-cw"
+                :loading="loading"
+                label="刷新"
+                @click="load()"
+              />
             </div>
+          </template>
+
+          <div class="h-full min-h-0 overflow-auto">
+            <ErrorState
+              v-if="loadError && !loading"
+              :description="loadError"
+              :retry="() => load()"
+            />
+            <LoadingState v-else-if="loading && !instances.length" description="正在拉取实例状态…" />
+            <template v-else>
+              <table v-if="filteredInstances.length" class="w-full text-sm">
+                <thead class="sticky top-0 z-10 border-b border-default bg-elevated/95 backdrop-blur-sm text-left text-muted">
+                  <tr>
+                    <th class="px-4 py-3 font-medium">名称</th>
+                    <th class="px-4 py-3 font-medium">状态</th>
+                    <th class="hidden px-4 py-3 font-medium md:table-cell">SSH 地址</th>
+                    <th class="px-4 py-3 text-right font-medium">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="row in filteredInstances"
+                    :key="row.id"
+                    class="table-row-interactive border-b border-muted group"
+                  >
+                    <td class="px-4 py-3">
+                      <div class="font-medium text-highlighted group-hover:text-primary transition-colors">
+                        {{ row.name }}
+                      </div>
+                      <div class="mt-0.5 font-mono text-[11px] text-dimmed md:hidden">
+                        {{ row.guest_ssh_host || "—" }}
+                      </div>
+                    </td>
+                    <td class="px-4 py-3"><StatusBadge :status="row.status" /></td>
+                    <td class="hidden px-4 py-3 font-mono text-xs text-toned md:table-cell">
+                      {{ row.guest_ssh_host || "—" }}
+                    </td>
+                    <td class="px-4 py-3">
+                      <div class="flex items-center justify-end gap-0.5">
+                        <InstanceActionBar
+                          :instance-id="row.id"
+                          :status="row.status"
+                          :disabled="deletingId !== null"
+                          size="sm"
+                          @status-optimistic="(s) => onStatusOptimistic(row.id, s)"
+                          @status-changed="(s) => onStatusChanged(row.id, s)"
+                          @done="() => onActionDone()"
+                        />
+                        <UTooltip text="删除">
+                          <UButton
+                            icon="i-lucide-trash-2"
+                            color="error"
+                            variant="ghost"
+                            size="sm"
+                            square
+                            class="action-btn"
+                            :loading="deletingId === row.id"
+                            :disabled="isDeleteDisabled(row)"
+                            @click="askDelete(row)"
+                          />
+                        </UTooltip>
+                        <UButton
+                          size="sm"
+                          variant="soft"
+                          label="进入管理"
+                          class="ml-1 transition-transform duration-150 hover:translate-x-0.5"
+                          trailing-icon="i-lucide-arrow-right"
+                          :disabled="deletingId === row.id"
+                          @click="manageInstance(row.id)"
+                        />
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+              <EmptyState
+                v-else-if="!loading"
+                :title="searchQuery.trim() ? '没有匹配的实例' : '还没有实例'"
+                :description="
+                  searchQuery.trim()
+                    ? '试试调整搜索关键词，或清空搜索查看全部实例。'
+                    : '创建第一个 QEMU 固件实例，开始串口调试与文件传输实验。'
+                "
+                :icon="searchQuery.trim() ? 'i-lucide-search-x' : 'i-lucide-server'"
+              >
+                <template #action>
+                  <UButton
+                    v-if="searchQuery.trim()"
+                    color="neutral"
+                    variant="soft"
+                    label="清空搜索"
+                    @click="searchQuery = ''"
+                  />
+                  <UButton v-else label="新建实例" icon="i-lucide-plus" @click="showCreate = true" />
+                </template>
+              </EmptyState>
+            </template>
           </div>
         </UCard>
-      </div>
+      </PageMotion>
 
-      <UModal v-model:open="showCreate" title="新建实例">
+      <UModal v-model:open="showCreate" title="新建实例" description="基于固件模板创建 QEMU 实例">
         <template #body>
           <div class="space-y-4">
             <UFormField label="名称" required>
-              <UInput v-model="newName" placeholder="例如：OpenWrt 实验环境" class="w-full" />
+              <UInput v-model="newName" placeholder="例如：OpenWrt 实验环境" class="w-full" autofocus />
             </UFormField>
             <UFormField label="固件模板" required>
               <USelect
@@ -161,6 +175,7 @@
                 :items="templateOptions"
                 value-key="value"
                 class="w-full"
+                placeholder="选择模板"
               />
             </UFormField>
             <UFormField label="自定义 RootFS">
@@ -171,8 +186,8 @@
               <URadioGroup
                 v-model="newNetworkType"
                 :items="[
-                  { label: '同一局域网', value: 'same' },
-                  { label: '独立局域网', value: 'different' },
+                  { label: '同一局域网', value: 'same', description: '共享 br_fsems 网桥' },
+                  { label: '独立局域网', value: 'different', description: '独立 br_fs_* 网段' },
                 ]"
               />
             </UFormField>
@@ -181,7 +196,40 @@
         <template #footer>
           <div class="flex justify-end gap-2">
             <UButton color="neutral" variant="ghost" label="取消" @click="cancelCreate" />
-            <UButton label="创建实例" :loading="creating" @click="create" />
+            <UButton
+              label="创建实例"
+              icon="i-lucide-plus"
+              :loading="creating"
+              :disabled="!newName.trim() || newTemplateId === undefined"
+              @click="create"
+            />
+          </div>
+        </template>
+      </UModal>
+
+      <UModal
+        v-model:open="confirmDeleteOpen"
+        title="删除实例"
+        description="此操作不可恢复"
+      >
+        <template #body>
+          <UAlert
+            color="error"
+            variant="subtle"
+            icon="i-lucide-triangle-alert"
+            title="将彻底删除该实例"
+            description="同步清理虚拟机专属磁盘镜像及全部解压的工作空间数据。"
+          />
+          <p class="mt-3 text-sm text-muted">
+            确认删除
+            <span class="font-semibold text-highlighted">{{ pendingDelete?.name }}</span>
+            ？
+          </p>
+        </template>
+        <template #footer>
+          <div class="flex justify-end gap-2">
+            <UButton color="neutral" variant="ghost" label="取消" @click="confirmDeleteOpen = false" />
+            <UButton color="error" label="确认删除" icon="i-lucide-trash-2" @click="confirmDelete" />
           </div>
         </template>
       </UModal>
@@ -194,7 +242,13 @@
       >
         <template #body>
           <div class="space-y-4 text-center">
-            <UIcon name="i-lucide-loader-circle" class="mx-auto size-9 animate-spin text-error" />
+            <motion.div
+              :animate="{ rotate: 360 }"
+              :transition="{ duration: 1, repeat: Infinity, ease: 'linear' }"
+              class="mx-auto flex size-12 items-center justify-center rounded-full bg-error/10 text-error"
+            >
+              <UIcon name="i-lucide-loader-circle" class="size-6" />
+            </motion.div>
             <div>
               <p class="font-semibold text-highlighted">{{ deleteTargetName || "实例" }}</p>
               <p class="mt-1 text-sm text-muted">{{ deleteProgressLabel }}</p>
@@ -204,14 +258,16 @@
               <li
                 v-for="(step, idx) in DELETE_STEPS"
                 :key="step.label"
-                class="flex items-center gap-2"
-                :class="idx < deleteProgressStep ? 'text-success' : idx === deleteProgressStep ? 'text-default' : 'text-dimmed'"
+                class="flex items-center gap-2 transition-colors"
+                :class="
+                  idx < deleteProgressStep
+                    ? 'text-success'
+                    : idx === deleteProgressStep
+                      ? 'text-default'
+                      : 'text-dimmed'
+                "
               >
-                <UIcon
-                  v-if="idx < deleteProgressStep"
-                  name="i-lucide-circle-check"
-                  class="size-4"
-                />
+                <UIcon v-if="idx < deleteProgressStep" name="i-lucide-circle-check" class="size-4" />
                 <UIcon
                   v-else-if="idx === deleteProgressStep"
                   name="i-lucide-loader-circle"
@@ -232,16 +288,21 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
+import { motion } from "motion-v";
 import {
   createInstance,
   fetchInstances,
   fetchTemplates,
-  instanceAction,
   deleteInstance,
 } from "@/api/endpoints";
 import type { Instance, Template } from "@/api/types";
 import StatusBadge from "@/components/StatusBadge.vue";
 import EmptyState from "@/components/EmptyState.vue";
+import ErrorState from "@/components/ErrorState.vue";
+import InstanceActionBar from "@/components/InstanceActionBar.vue";
+import LoadingState from "@/components/LoadingState.vue";
+import PageMotion from "@/components/PageMotion.vue";
+import StatCard from "@/components/StatCard.vue";
 import TaskCenter from "@/components/TaskCenter.vue";
 import { useUiStore } from "@/stores/ui";
 import { toastError, toastSuccess } from "@/utils/toast";
@@ -261,6 +322,7 @@ const ui = useUiStore();
 const instances = ref<Instance[]>([]);
 const templates = ref<Template[]>([]);
 const loading = ref(false);
+const loadError = ref("");
 const showCreate = ref(false);
 const newName = ref("");
 const newTemplateId = ref<number | undefined>(undefined);
@@ -278,6 +340,9 @@ const deleteProgressPercent = ref(0);
 const deleteProgressStep = ref(0);
 const deleteProgressLabel = ref("");
 let deleteProgressTimer: ReturnType<typeof setTimeout> | null = null;
+
+const confirmDeleteOpen = ref(false);
+const pendingDelete = ref<Instance | null>(null);
 
 const runningCount = computed(() => instances.value.filter((i) => i.status === "RUNNING").length);
 const stoppedCount = computed(() => instances.value.filter((i) => i.status === "STOPPED").length);
@@ -297,11 +362,45 @@ const templateOptions = computed(() =>
   templates.value.map((t) => ({ label: `${t.name} (${t.arch})`, value: t.id }))
 );
 
+function isDeleteDisabled(row: Instance) {
+  return (
+    deletingId.value !== null ||
+    row.status === "RUNNING" ||
+    row.status === "STARTING" ||
+    row.status === "STOPPING"
+  );
+}
+
+function patchInstanceStatus(id: string, status: string) {
+  const idx = instances.value.findIndex((i) => i.id === id);
+  if (idx < 0) return;
+  instances.value[idx] = { ...instances.value[idx], status: status as Instance["status"] };
+}
+
+function onStatusOptimistic(id: string, status: string) {
+  patchInstanceStatus(id, status);
+}
+
+function onStatusChanged(id: string, status: string) {
+  patchInstanceStatus(id, status);
+  syncStatusPolling();
+}
+
+function onActionDone() {
+  // 过渡态由轮询刷新到最终 RUNNING/STOPPED
+  void load(true);
+}
+
 async function load(silent = false) {
   if (!silent) loading.value = true;
   try {
     const data = await fetchInstances();
     instances.value = data.list;
+    loadError.value = "";
+  } catch (e: unknown) {
+    if (!silent) {
+      loadError.value = e instanceof Error ? e.message : "加载实例失败";
+    }
   } finally {
     if (!silent) loading.value = false;
   }
@@ -325,20 +424,13 @@ function syncStatusPolling() {
 watch(transitionalCount, syncStatusPolling, { immediate: true });
 
 async function loadTemplates() {
-  templates.value = await fetchTemplates();
-  if (templates.value.length && newTemplateId.value === undefined) {
-    newTemplateId.value = templates.value[0].id;
-  }
-}
-
-async function doAction(id: string, action: "start" | "stop" | "reset") {
-  const actionMap = { start: "启动", stop: "停止", reset: "重启" };
   try {
-    await instanceAction(id, action);
-    toastSuccess(`已执行${actionMap[action]}`);
-    await load();
-  } catch (e: unknown) {
-    toastError(e instanceof Error ? e.message : "操作失败");
+    templates.value = await fetchTemplates();
+    if (templates.value.length && newTemplateId.value === undefined) {
+      newTemplateId.value = templates.value[0].id;
+    }
+  } catch {
+    /* templates optional for list view */
   }
 }
 
@@ -398,11 +490,22 @@ function finishDeleteProgressSuccess() {
   deleteProgressLabel.value = "删除完成";
 }
 
+function askDelete(row: Instance) {
+  if (deletingId.value) return;
+  pendingDelete.value = row;
+  confirmDeleteOpen.value = true;
+}
+
+async function confirmDelete() {
+  const row = pendingDelete.value;
+  confirmDeleteOpen.value = false;
+  if (!row) return;
+  await deleteInst(row);
+  pendingDelete.value = null;
+}
+
 async function deleteInst(row: Instance) {
   if (deletingId.value) return;
-  if (!window.confirm("确定要彻底删除该实例吗？这将同步清理虚拟机专属磁盘镜像及全部解压的工作空间数据！")) {
-    return;
-  }
 
   deletingId.value = row.id;
   deleteTargetId.value = row.id;
@@ -431,7 +534,12 @@ async function create() {
   if (!newName.value || newTemplateId.value === undefined) return;
   creating.value = true;
   try {
-    await createInstance(newName.value, newTemplateId.value, newRootfsPath.value.trim(), newNetworkType.value);
+    await createInstance(
+      newName.value,
+      newTemplateId.value,
+      newRootfsPath.value.trim(),
+      newNetworkType.value
+    );
     showCreate.value = false;
     resetForm();
     await load();

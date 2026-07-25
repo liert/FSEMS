@@ -1,110 +1,296 @@
 <template>
   <div class="space-y-4 p-1">
-    <div v-if="initialLoading" class="flex justify-center py-16">
-      <UIcon name="i-lucide-loader-circle" class="size-8 animate-spin text-muted" />
-    </div>
+    <LoadingState v-if="initialLoading" description="加载实例详情…" />
     <template v-else>
       <div class="grid gap-4 lg:grid-cols-2">
-        <UCard>
-          <template #header><span class="font-semibold">运行状态</span></template>
-          <dl class="space-y-2 text-sm">
-            <div class="flex justify-between gap-4"><dt class="text-muted">状态</dt><dd><StatusBadge :status="detail?.status || ''" /></dd></div>
-            <div class="flex justify-between gap-4"><dt class="text-muted">QEMU PID</dt><dd>{{ detail?.pid ?? "—" }}</dd></div>
-            <div class="flex justify-between gap-4"><dt class="text-muted">SSH</dt><dd class="font-mono">{{ sshEndpoint }}</dd></div>
-            <div class="flex justify-between gap-4"><dt class="text-muted">网络</dt><dd>{{ networkSummary }}</dd></div>
-            <div v-if="detail?.error_msg" class="text-error text-xs">{{ detail.error_msg }}</div>
-          </dl>
-        </UCard>
-
-        <UCard>
-          <template #header><span class="font-semibold">QEMU 内存</span></template>
-          <dl class="space-y-2 text-sm">
-            <div class="flex justify-between"><dt class="text-muted">配置上限</dt><dd>{{ detail?.ram_size_mb ?? "—" }} MB</dd></div>
-            <div class="flex justify-between"><dt class="text-muted">进程 RSS</dt><dd>{{ ramUsedText }}</dd></div>
-          </dl>
-          <UProgress v-if="detail?.ram_size_mb" :model-value="ramUsagePercent" class="mt-3" />
-        </UCard>
-
-        <UCard>
-          <template #header><span class="font-semibold">启动磁盘 (rootfs.img)</span></template>
-          <dl class="space-y-2 text-sm">
-            <div class="flex justify-between"><dt class="text-muted">容量</dt><dd>{{ formatBytes(detail?.drive_fs_total_bytes) }}</dd></div>
-            <div class="flex justify-between"><dt class="text-muted">已用</dt><dd>{{ formatBytes(detail?.drive_fs_used_bytes) }}</dd></div>
-            <div class="flex justify-between gap-2"><dt class="shrink-0 text-muted">路径</dt><dd class="truncate font-mono text-xs" :title="detail?.drive_path || ''">{{ detail?.drive_path || "—" }}</dd></div>
-          </dl>
-          <UProgress v-if="driveUsagePercent !== null" :model-value="driveUsagePercent" color="secondary" class="mt-3" />
-          <UButton class="mt-3" size="sm" variant="soft" label="扩容磁盘" :disabled="!canExpandDrive" @click="showExpand = true" />
-        </UCard>
-
-        <UCard>
-          <template #header><span class="font-semibold">自定义 RootFS</span></template>
-          <div class="space-y-3">
-            <UFormField label="源路径">
-              <UInput v-model="customRootfsInput" placeholder="宿主机压缩包或目录" class="w-full" :disabled="customRootfsBusy" />
-            </UFormField>
-            <div class="flex gap-2">
-              <UButton size="sm" label="应用" :loading="customRootfsBusy" @click="applyCustomRootfs" />
-              <UButton size="sm" color="neutral" variant="soft" label="清除" :disabled="customRootfsBusy" @click="clearCustomRootfs" />
-            </div>
-            <dl class="space-y-1 text-sm">
-              <div class="flex justify-between gap-2"><dt class="text-muted">解压目录</dt><dd class="truncate font-mono text-xs">{{ detail?.custom_rootfs_dir_path || "不存在" }}</dd></div>
-              <div class="flex justify-between"><dt class="text-muted">目录占用</dt><dd>{{ formatBytes(detail?.custom_rootfs_dir_size_bytes) }}</dd></div>
+        <motion.div :initial="{ opacity: 0, y: 10 }" :animate="{ opacity: 1, y: 0 }" :transition="staggerDelay(0)">
+          <UCard class="h-full ring-1 ring-default/40 transition-shadow hover:shadow-md">
+            <template #header>
+              <div class="flex items-center gap-2">
+                <UIcon name="i-lucide-activity" class="size-4 text-primary" />
+                <span class="font-semibold">运行状态</span>
+              </div>
+            </template>
+            <dl class="space-y-2.5">
+              <div class="meta-row">
+                <dt class="meta-label">状态</dt>
+                <dd class="meta-value flex justify-end"><StatusBadge :status="detail?.status || ''" /></dd>
+              </div>
+              <div class="meta-row">
+                <dt class="meta-label">QEMU PID</dt>
+                <dd class="meta-value tabular-nums">{{ detail?.pid ?? "—" }}</dd>
+              </div>
+              <div class="meta-row">
+                <dt class="meta-label">SSH</dt>
+                <dd class="meta-value meta-mono">{{ sshEndpoint }}</dd>
+              </div>
+              <div class="meta-row">
+                <dt class="meta-label">网络</dt>
+                <dd class="meta-value">{{ networkSummary }}</dd>
+              </div>
+              <UAlert v-if="detail?.error_msg" color="error" variant="subtle" :title="detail.error_msg" class="mt-1" />
             </dl>
-          </div>
-        </UCard>
+          </UCard>
+        </motion.div>
 
-        <UCard class="lg:col-span-2">
-          <template #header><span class="font-semibold">模板与路径</span></template>
-          <dl class="grid gap-2 text-sm sm:grid-cols-2">
-            <div><span class="text-muted">模板</span> · {{ detail?.template_name }} ({{ detail?.template_arch }})</div>
-            <div class="truncate"><span class="text-muted">工作区</span> · <span class="font-mono text-xs">{{ detail?.workspace_path }}</span></div>
-            <div class="truncate sm:col-span-2"><span class="text-muted">内核</span> · <span class="font-mono text-xs">{{ detail?.kernel_path }}</span></div>
-          </dl>
-        </UCard>
+        <motion.div :initial="{ opacity: 0, y: 10 }" :animate="{ opacity: 1, y: 0 }" :transition="staggerDelay(1)">
+          <UCard class="h-full ring-1 ring-default/40 transition-shadow hover:shadow-md">
+            <template #header>
+              <div class="flex items-center gap-2">
+                <UIcon name="i-lucide-memory-stick" class="size-4 text-info" />
+                <span class="font-semibold">QEMU 内存</span>
+              </div>
+            </template>
+            <dl class="space-y-2.5">
+              <div class="meta-row">
+                <dt class="meta-label">配置上限</dt>
+                <dd class="meta-value tabular-nums">{{ detail?.ram_size_mb ?? "—" }} MB</dd>
+              </div>
+              <div class="meta-row">
+                <dt class="meta-label">进程 RSS</dt>
+                <dd class="meta-value tabular-nums">{{ ramUsedText }}</dd>
+              </div>
+            </dl>
+            <UProgress v-if="detail?.ram_size_mb" :model-value="ramUsagePercent" class="mt-3" />
+          </UCard>
+        </motion.div>
 
-        <UCard class="lg:col-span-2">
-          <template #header>
-            <div class="flex items-center justify-between">
-              <span class="font-semibold">磁盘快照</span>
-              <UButton size="sm" icon="i-lucide-plus" label="创建" :disabled="detail?.status !== 'STOPPED'" @click="showSnap = true" />
+        <motion.div :initial="{ opacity: 0, y: 10 }" :animate="{ opacity: 1, y: 0 }" :transition="staggerDelay(2)">
+          <UCard class="h-full ring-1 ring-default/40 transition-shadow hover:shadow-md">
+            <template #header>
+              <div class="flex items-center gap-2">
+                <UIcon name="i-lucide-hard-drive" class="size-4 text-secondary" />
+                <span class="font-semibold">启动磁盘 (rootfs.img)</span>
+              </div>
+            </template>
+            <dl class="space-y-2.5">
+              <div class="meta-row">
+                <dt class="meta-label">容量</dt>
+                <template v-if="!driveEditing">
+                  <dd class="meta-value tabular-nums min-w-0 flex-1 text-right">
+                    {{ formatBytes(detail?.drive_fs_total_bytes) }}
+                    <span v-if="driveCapacityMb != null" class="ml-1 text-dimmed text-xs">
+                      ({{ driveCapacityMb }} MB)
+                    </span>
+                  </dd>
+                  <UTooltip :text="canExpandDrive ? '编辑容量并扩容' : '当前状态不可扩容'">
+                    <UButton
+                      color="neutral"
+                      variant="ghost"
+                      size="xs"
+                      square
+                      icon="i-lucide-pencil"
+                      class="meta-action shrink-0"
+                      :ui="{ leadingIcon: 'size-3' }"
+                      :disabled="!canExpandDrive || expanding"
+                      :loading="expanding"
+                      @click.stop="startDriveEdit"
+                    />
+                  </UTooltip>
+                </template>
+                <div v-else ref="driveEditWrap" class="flex min-w-0 flex-1 items-center justify-end gap-1.5">
+                  <UInputNumber
+                    ref="driveInputRef"
+                    v-model="driveCapacityEditMb"
+                    :min="driveCapacityBaselineMb"
+                    :max="driveCapacityBaselineMb + 4096"
+                    size="sm"
+                    class="w-36"
+                    :disabled="expanding"
+                    @keydown.enter.prevent="onDriveEditCommitKey"
+                    @keydown.escape.prevent="cancelDriveEdit"
+                    @blur="onDriveBlur"
+                  />
+                  <span class="shrink-0 text-xs text-muted">MB</span>
+                </div>
+              </div>
+              <div class="meta-row">
+                <dt class="meta-label">已用</dt>
+                <dd class="meta-value tabular-nums">{{ formatBytes(detail?.drive_fs_used_bytes) }}</dd>
+              </div>
+              <div class="meta-row">
+                <dt class="meta-label">路径</dt>
+                <dd class="meta-value meta-mono truncate" :title="detail?.drive_path || ''">{{ detail?.drive_path || "—" }}</dd>
+              </div>
+            </dl>
+            <UProgress v-if="driveUsagePercent !== null" :model-value="driveUsagePercent" color="secondary" class="mt-3" />
+          </UCard>
+        </motion.div>
+
+        <motion.div :initial="{ opacity: 0, y: 10 }" :animate="{ opacity: 1, y: 0 }" :transition="staggerDelay(3)">
+          <UCard class="h-full ring-1 ring-default/40 transition-shadow hover:shadow-md">
+            <template #header>
+              <div class="flex items-center gap-2">
+                <UIcon name="i-lucide-folder-tree" class="size-4 text-warning" />
+                <span class="font-semibold">自定义 RootFS</span>
+              </div>
+            </template>
+            <div class="space-y-2.5">
+              <!-- 同一行：标签 + 路径文本 + 编辑图标；非编辑态无输入框 -->
+              <div class="meta-row">
+                <span class="meta-label">源路径</span>
+                <template v-if="!rootfsEditing">
+                  <span
+                    class="meta-value meta-mono min-w-0 flex-1 truncate"
+                    :class="displayRootfsPath ? '' : 'text-dimmed'"
+                    :title="displayRootfsPath || undefined"
+                  >
+                    {{ displayRootfsPath || "未设置" }}
+                  </span>
+                  <UTooltip :text="customRootfsBusy ? '保存中…' : '编辑源路径'">
+                    <UButton
+                      color="neutral"
+                      variant="ghost"
+                      size="xs"
+                      square
+                      :icon="customRootfsBusy ? 'i-lucide-loader-circle' : 'i-lucide-pencil'"
+                      :loading="customRootfsBusy"
+                      :disabled="customRootfsBusy"
+                      class="meta-action shrink-0"
+                      :ui="{ leadingIcon: 'size-3' }"
+                      @click.stop="startRootfsEdit"
+                    />
+                  </UTooltip>
+                </template>
+                <div
+                  v-else
+                  ref="rootfsEditWrap"
+                  class="min-w-0 flex-1"
+                >
+                  <UInput
+                    ref="rootfsInputRef"
+                    v-model="customRootfsInput"
+                    autofocus
+                    size="sm"
+                    class="w-full"
+                    placeholder="宿主机路径，留空清除 · 失焦保存"
+                    :disabled="customRootfsBusy"
+                    @keydown.enter.prevent="commitRootfsEdit"
+                    @keydown.escape.prevent="cancelRootfsEdit"
+                    @blur="onRootfsBlur"
+                  />
+                </div>
+              </div>
+              <div class="meta-row">
+                <span class="meta-label">解压目录</span>
+                <span
+                  class="meta-value meta-mono truncate"
+                  :title="detail?.custom_rootfs_dir_path || ''"
+                >
+                  {{ detail?.custom_rootfs_dir_path || "不存在" }}
+                </span>
+              </div>
+              <div class="meta-row">
+                <span class="meta-label">目录占用</span>
+                <span class="meta-value tabular-nums">{{ formatBytes(detail?.custom_rootfs_dir_size_bytes) }}</span>
+              </div>
             </div>
-          </template>
-          <div class="overflow-auto">
-            <table class="w-full text-sm">
-              <thead class="text-left text-muted">
-                <tr><th class="py-2">名称</th><th>大小</th><th>时间</th><th class="text-right">操作</th></tr>
-              </thead>
-              <tbody>
-                <tr v-for="s in snapshots" :key="s.id" class="border-t border-muted">
-                  <td class="py-2 font-medium">{{ s.name }}</td>
-                  <td>{{ formatBytes(s.size_bytes) }}</td>
-                  <td class="text-xs text-muted">{{ formatTime(s.created_at) }}</td>
-                  <td class="text-right space-x-1">
-                    <UButton size="xs" variant="soft" label="恢复" :disabled="detail?.status !== 'STOPPED'" @click="restoreSnap(s)" />
-                    <UButton size="xs" color="error" variant="soft" label="删除" @click="deleteSnap(s)" />
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-            <p v-if="!snapshots.length" class="py-6 text-center text-muted">暂无快照</p>
-          </div>
-        </UCard>
+          </UCard>
+        </motion.div>
+
+        <motion.div class="lg:col-span-2" :initial="{ opacity: 0, y: 10 }" :animate="{ opacity: 1, y: 0 }" :transition="staggerDelay(4)">
+          <UCard class="ring-1 ring-default/40">
+            <template #header>
+              <div class="flex items-center gap-2">
+                <UIcon name="i-lucide-file-code" class="size-4 text-muted" />
+                <span class="font-semibold">模板与路径</span>
+              </div>
+            </template>
+            <dl class="grid gap-2.5 sm:grid-cols-2">
+              <div class="meta-row justify-start gap-2">
+                <span class="meta-label">模板</span>
+                <span class="meta-value text-left">{{ detail?.template_name }} ({{ detail?.template_arch }})</span>
+              </div>
+              <div class="meta-row justify-start gap-2 min-w-0">
+                <span class="meta-label">工作区</span>
+                <span class="meta-value meta-mono min-w-0 truncate text-left" :title="detail?.workspace_path || ''">{{ detail?.workspace_path }}</span>
+              </div>
+              <div class="meta-row justify-start gap-2 min-w-0 sm:col-span-2">
+                <span class="meta-label">内核</span>
+                <span class="meta-value meta-mono min-w-0 truncate text-left" :title="detail?.kernel_path || ''">{{ detail?.kernel_path }}</span>
+              </div>
+            </dl>
+          </UCard>
+        </motion.div>
+
+        <motion.div class="lg:col-span-2" :initial="{ opacity: 0, y: 10 }" :animate="{ opacity: 1, y: 0 }" :transition="staggerDelay(5)">
+          <UCard class="ring-1 ring-default/40">
+            <template #header>
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                  <UIcon name="i-lucide-camera" class="size-4 text-primary" />
+                  <span class="font-semibold">磁盘快照</span>
+                </div>
+                <UButton size="sm" icon="i-lucide-plus" label="创建" :disabled="detail?.status !== 'STOPPED'" @click="showSnap = true" />
+              </div>
+            </template>
+            <div class="overflow-auto">
+              <table v-if="snapshots.length" class="w-full text-sm">
+                <thead class="text-left text-muted">
+                  <tr>
+                    <th class="py-2 font-medium">名称</th>
+                    <th class="font-medium">大小</th>
+                    <th class="font-medium">时间</th>
+                    <th class="text-right font-medium">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="s in snapshots" :key="s.id" class="table-row-interactive border-t border-muted">
+                    <td class="py-2.5 font-medium">{{ s.name }}</td>
+                    <td class="tabular-nums">{{ formatBytes(s.size_bytes) }}</td>
+                    <td class="text-xs text-muted">{{ formatTime(s.created_at) }}</td>
+                    <td class="text-right space-x-1">
+                      <UButton size="xs" variant="soft" label="恢复" :disabled="detail?.status !== 'STOPPED'" @click="restoreSnap(s)" />
+                      <UButton size="xs" color="error" variant="soft" label="删除" @click="deleteSnap(s)" />
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+              <EmptyState
+                v-else
+                title="暂无快照"
+                description="在实例停止时创建磁盘快照，便于回滚实验环境。"
+                icon="i-lucide-camera"
+                size="sm"
+              />
+            </div>
+          </UCard>
+        </motion.div>
       </div>
     </template>
 
-    <UModal v-model:open="showExpand" title="扩容磁盘">
+    <UModal
+      v-model:open="showExpandConfirm"
+      title="确认扩容磁盘"
+      description="扩容后无法通过此操作缩减容量"
+    >
       <template #body>
-        <UFormField label="增加容量 (MB)">
-          <UInputNumber v-model="expandMb" :min="1" :max="4096" class="w-full" />
-        </UFormField>
-        <div class="mt-2 flex flex-wrap gap-2">
-          <UButton v-for="p in [64, 128, 256, 512]" :key="p" size="xs" variant="soft" color="neutral" :label="`+${p}`" @click="expandMb = p" />
-        </div>
+        <UAlert
+          color="warning"
+          variant="subtle"
+          icon="i-lucide-hard-drive"
+          title="将增加磁盘容量"
+          :description="expandConfirmDescription"
+        />
+        <dl class="mt-4 space-y-2 text-sm">
+          <div class="flex justify-between gap-4">
+            <dt class="text-muted">当前容量</dt>
+            <dd class="tabular-nums font-medium">{{ driveCapacityBaselineMb }} MB</dd>
+          </div>
+          <div class="flex justify-between gap-4">
+            <dt class="text-muted">目标容量</dt>
+            <dd class="tabular-nums font-medium text-primary">{{ driveCapacityEditMb }} MB</dd>
+          </div>
+          <div class="flex justify-between gap-4">
+            <dt class="text-muted">本次增加</dt>
+            <dd class="tabular-nums font-medium text-warning">+{{ pendingExpandMb }} MB</dd>
+          </div>
+        </dl>
       </template>
       <template #footer>
         <div class="flex justify-end gap-2">
-          <UButton color="neutral" variant="ghost" label="取消" @click="showExpand = false" />
-          <UButton label="确认扩容" :loading="expanding" @click="confirmExpand" />
+          <UButton color="neutral" variant="ghost" label="取消" :disabled="expanding" @click="cancelExpandConfirm" />
+          <UButton label="确认扩容" icon="i-lucide-check" :loading="expanding" @click="confirmExpand" />
         </div>
       </template>
     </UModal>
@@ -124,7 +310,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { motion } from "motion-v";
 import {
   createSnapshot,
   deleteSnapshot,
@@ -135,8 +322,11 @@ import {
   updateCustomRootfs,
 } from "@/api/endpoints";
 import type { InstanceDetail, Snapshot } from "@/api/types";
+import EmptyState from "@/components/EmptyState.vue";
+import LoadingState from "@/components/LoadingState.vue";
 import StatusBadge from "@/components/StatusBadge.vue";
 import { useTaskStore } from "@/stores/tasks";
+import { staggerDelay } from "@/utils/motion";
 import { toastError, toastSuccess, toastWarning } from "@/utils/toast";
 
 const props = defineProps<{ instanceId: string; refreshKey?: number }>();
@@ -146,9 +336,38 @@ const initialLoading = ref(true);
 const detail = ref<InstanceDetail | null>(null);
 const customRootfsInput = ref("");
 const customRootfsBusy = ref(false);
-const showExpand = ref(false);
-const expandMb = ref(128);
+const rootfsEditing = ref(false);
+const rootfsEditBaseline = ref("");
+const rootfsInputRef = ref<{ $el?: HTMLElement } | null>(null);
+const rootfsEditWrap = ref<HTMLElement | null>(null);
+let rootfsBlurTimer: ReturnType<typeof setTimeout> | null = null;
+
+const displayRootfsPath = computed(
+  () => detail.value?.custom_rootfs_source_path || customRootfsInput.value.trim() || ""
+);
+
+/** 磁盘容量：展示 + 铅笔编辑（失焦有变化则确认弹窗） */
+const driveEditing = ref(false);
+const driveCapacityBaselineMb = ref(0);
+const driveCapacityEditMb = ref(0);
+const driveInputRef = ref<{ $el?: HTMLElement } | null>(null);
+const driveEditWrap = ref<HTMLElement | null>(null);
+const showExpandConfirm = ref(false);
+const pendingExpandMb = ref(0);
 const expanding = ref(false);
+let driveBlurTimer: ReturnType<typeof setTimeout> | null = null;
+
+const driveCapacityMb = computed(() => {
+  const b = detail.value?.drive_fs_total_bytes;
+  if (b == null || b <= 0) return null;
+  return Math.max(1, Math.round(b / (1024 * 1024)));
+});
+
+const expandConfirmDescription = computed(
+  () =>
+    `将磁盘从 ${driveCapacityBaselineMb.value} MB 扩容至 ${driveCapacityEditMb.value} MB（+${pendingExpandMb.value} MB）。` +
+    (isRunningLike.value ? " 实例运行中时将尝试热扩容。" : "")
+);
 const snapshots = ref<Snapshot[]>([]);
 const showSnap = ref(false);
 const snapName = ref("");
@@ -211,7 +430,9 @@ async function loadDetail(silent = false) {
   if (!silent && !detail.value) initialLoading.value = true;
   try {
     detail.value = await fetchInstanceDetail(props.instanceId);
-    if (!customRootfsBusy.value) customRootfsInput.value = detail.value.custom_rootfs_source_path || "";
+    if (!customRootfsBusy.value && !rootfsEditing.value) {
+      customRootfsInput.value = detail.value.custom_rootfs_source_path || "";
+    }
     await loadSnapshots();
     if (detail.value.status === "STARTING" || detail.value.status === "STOPPING") startPolling();
     else stopPolling();
@@ -229,52 +450,206 @@ async function loadSnapshots() {
   }
 }
 
-async function applyCustomRootfs() {
+function focusRootfsInput() {
+  void nextTick(() => {
+    const root = rootfsInputRef.value?.$el as HTMLElement | undefined;
+    const input =
+      root?.querySelector?.("input") ||
+      (root instanceof HTMLInputElement ? root : null) ||
+      rootfsEditWrap.value?.querySelector("input");
+    input?.focus();
+    input?.select?.();
+  });
+}
+
+function startRootfsEdit() {
+  if (customRootfsBusy.value) return;
+  rootfsEditBaseline.value = detail.value?.custom_rootfs_source_path || "";
+  customRootfsInput.value = rootfsEditBaseline.value;
+  rootfsEditing.value = true;
+  focusRootfsInput();
+}
+
+function cancelRootfsEdit() {
+  if (rootfsBlurTimer) {
+    clearTimeout(rootfsBlurTimer);
+    rootfsBlurTimer = null;
+  }
+  customRootfsInput.value = rootfsEditBaseline.value;
+  rootfsEditing.value = false;
+}
+
+/**
+ * 失焦自动保存。用短延迟避免 Enter 与 blur 重复提交。
+ */
+function onRootfsBlur() {
+  if (rootfsBlurTimer) clearTimeout(rootfsBlurTimer);
+  rootfsBlurTimer = setTimeout(() => {
+    rootfsBlurTimer = null;
+    void commitRootfsEdit();
+  }, 120);
+}
+
+async function commitRootfsEdit() {
+  if (rootfsBlurTimer) {
+    clearTimeout(rootfsBlurTimer);
+    rootfsBlurTimer = null;
+  }
+  if (!rootfsEditing.value || customRootfsBusy.value) return;
+
   const path = customRootfsInput.value.trim();
-  if (!path) {
-    toastWarning("请填写源路径");
+  const baseline = rootfsEditBaseline.value.trim();
+
+  // 未改动：直接退出编辑
+  if (path === baseline) {
+    rootfsEditing.value = false;
+    customRootfsInput.value = baseline;
     return;
   }
+
   customRootfsBusy.value = true;
   try {
-    detail.value = await updateCustomRootfs(props.instanceId, path);
-    customRootfsInput.value = detail.value.custom_rootfs_source_path || path;
-    toastSuccess("自定义 RootFS 已更新");
+    // 留空 = 清除自定义 RootFS
+    detail.value = await updateCustomRootfs(props.instanceId, path || null);
+    const saved = detail.value.custom_rootfs_source_path || "";
+    customRootfsInput.value = saved;
+    rootfsEditBaseline.value = saved;
+    rootfsEditing.value = false;
+    toastSuccess(path ? "自定义 RootFS 已更新" : "已清除自定义 RootFS");
     emit("updated");
   } catch (e: unknown) {
     toastError(e instanceof Error ? e.message : "更新失败");
+    // 失败时保持编辑态，方便改路径重试
+    focusRootfsInput();
   } finally {
     customRootfsBusy.value = false;
   }
 }
 
-async function clearCustomRootfs() {
-  if (!window.confirm("确定清除自定义 RootFS？")) return;
-  customRootfsBusy.value = true;
-  try {
-    detail.value = await updateCustomRootfs(props.instanceId, null);
-    customRootfsInput.value = "";
-    toastSuccess("已清除");
-    emit("updated");
-  } catch (e: unknown) {
-    toastError(e instanceof Error ? e.message : "清除失败");
-  } finally {
-    customRootfsBusy.value = false;
+function focusDriveInput() {
+  void nextTick(() => {
+    const root = driveInputRef.value?.$el as HTMLElement | undefined;
+    const input =
+      root?.querySelector?.("input") ||
+      (root instanceof HTMLInputElement ? root : null) ||
+      driveEditWrap.value?.querySelector("input");
+    input?.focus();
+    input?.select?.();
+  });
+}
+
+function startDriveEdit() {
+  if (!canExpandDrive.value || expanding.value) return;
+  const mb = driveCapacityMb.value;
+  if (mb == null) {
+    toastWarning("无法读取当前磁盘容量");
+    return;
   }
+  driveCapacityBaselineMb.value = mb;
+  driveCapacityEditMb.value = mb;
+  driveEditing.value = true;
+  focusDriveInput();
+}
+
+function cancelDriveEdit() {
+  if (driveBlurTimer) {
+    clearTimeout(driveBlurTimer);
+    driveBlurTimer = null;
+  }
+  driveEditing.value = false;
+  driveCapacityEditMb.value = driveCapacityBaselineMb.value;
+}
+
+/**
+ * 失焦：数值未变则静默退出；有变化则弹出确认框（不立刻提交）。
+ */
+function onDriveBlur() {
+  if (driveBlurTimer) clearTimeout(driveBlurTimer);
+  driveBlurTimer = setTimeout(() => {
+    driveBlurTimer = null;
+    finishDriveEditOnBlur();
+  }, 120);
+}
+
+function onDriveEditCommitKey() {
+  if (driveBlurTimer) {
+    clearTimeout(driveBlurTimer);
+    driveBlurTimer = null;
+  }
+  finishDriveEditOnBlur();
+}
+
+function finishDriveEditOnBlur() {
+  if (!driveEditing.value || expanding.value || showExpandConfirm.value) return;
+
+  const baseline = driveCapacityBaselineMb.value;
+  let next = Number(driveCapacityEditMb.value);
+  if (!Number.isFinite(next)) {
+    cancelDriveEdit();
+    return;
+  }
+  next = Math.round(next);
+
+  // 未改动：不做任何操作
+  if (next === baseline) {
+    driveEditing.value = false;
+    return;
+  }
+
+  if (next < baseline) {
+    toastWarning("不支持缩小磁盘，请输入不小于当前容量的数值");
+    driveCapacityEditMb.value = baseline;
+    focusDriveInput();
+    return;
+  }
+
+  const delta = next - baseline;
+  if (delta < 1) {
+    driveEditing.value = false;
+    return;
+  }
+  if (delta > 4096) {
+    toastWarning("单次扩容最多 4096 MB");
+    driveCapacityEditMb.value = baseline + 4096;
+    focusDriveInput();
+    return;
+  }
+
+  pendingExpandMb.value = delta;
+  driveCapacityEditMb.value = next;
+  driveEditing.value = false;
+  showExpandConfirm.value = true;
+}
+
+function cancelExpandConfirm() {
+  showExpandConfirm.value = false;
+  pendingExpandMb.value = 0;
+  driveCapacityEditMb.value = driveCapacityBaselineMb.value;
 }
 
 async function confirmExpand() {
+  const delta = pendingExpandMb.value;
+  if (delta < 1) {
+    showExpandConfirm.value = false;
+    return;
+  }
   expanding.value = true;
   try {
     const manage = isRunningLike.value;
-    const result = await expandInstanceDrive(props.instanceId, expandMb.value, manage);
+    const result = await expandInstanceDrive(props.instanceId, delta, manage);
     toastSuccess(`已扩容 +${result.expanded_mb} MB`);
-    showExpand.value = false;
+    showExpandConfirm.value = false;
+    pendingExpandMb.value = 0;
     await loadDetail(true);
     emit("updated");
     if (result.status) emit("status-changed", result.status);
   } catch (e: unknown) {
     toastError(e instanceof Error ? e.message : "扩容失败");
+    // 失败后可再次编辑
+    driveEditing.value = true;
+    driveCapacityEditMb.value = driveCapacityBaselineMb.value + delta;
+    showExpandConfirm.value = false;
+    focusDriveInput();
   } finally {
     expanding.value = false;
   }
@@ -352,5 +727,15 @@ function stopPolling() {
 watch(() => props.refreshKey, () => void loadDetail(true));
 watch(() => props.instanceId, () => void loadDetail(), { immediate: true });
 onMounted(() => void loadDetail());
-onBeforeUnmount(stopPolling);
+onBeforeUnmount(() => {
+  stopPolling();
+  if (rootfsBlurTimer) {
+    clearTimeout(rootfsBlurTimer);
+    rootfsBlurTimer = null;
+  }
+  if (driveBlurTimer) {
+    clearTimeout(driveBlurTimer);
+    driveBlurTimer = null;
+  }
+});
 </script>

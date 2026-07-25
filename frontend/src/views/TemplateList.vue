@@ -13,7 +13,8 @@
               placeholder="架构筛选"
               class="w-36"
             />
-            <UButton icon="i-lucide-plus" label="新建模板" @click="openCreate" />
+            <UButton icon="i-lucide-plus" label="新建模板" class="hidden sm:inline-flex" @click="openCreate" />
+            <UButton icon="i-lucide-plus" square class="sm:hidden" @click="openCreate" />
             <TaskCenter />
           </div>
         </template>
@@ -21,57 +22,115 @@
     </template>
 
     <template #body>
-      <UCard class="flex h-full min-h-0 flex-col overflow-hidden" :ui="{ body: 'flex-1 min-h-0 p-0' }">
-        <div class="h-full min-h-0 overflow-auto">
-          <table class="w-full text-sm">
-            <thead class="sticky top-0 z-10 bg-elevated border-b border-default">
-              <tr class="text-left text-muted">
-                <th class="px-4 py-3 font-medium">ID</th>
-                <th class="px-4 py-3 font-medium">名称</th>
-                <th class="px-4 py-3 font-medium">架构</th>
-                <th class="px-4 py-3 font-medium">QEMU</th>
-                <th class="px-4 py-3 font-medium">内存</th>
-                <th class="px-4 py-3 font-medium">SSH 默认</th>
-                <th class="px-4 py-3 font-medium text-right">操作</th>
-              </tr>
-            </thead>
-            <tbody v-if="templates.length">
-              <tr
-                v-for="row in templates"
-                :key="row.id"
-                class="border-b border-muted hover:bg-muted/50"
+      <PageMotion>
+        <UCard
+          class="flex h-full min-h-0 flex-col overflow-hidden ring-1 ring-default"
+          :ui="{ body: 'flex-1 min-h-0 p-0', header: 'py-3' }"
+        >
+          <template #header>
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="flex items-center gap-2">
+                <span class="text-sm font-semibold text-highlighted">模板列表</span>
+                <UBadge v-if="templates.length" color="neutral" variant="subtle" size="sm">
+                  {{ templates.length }}
+                </UBadge>
+              </div>
+              <UButton
+                color="neutral"
+                variant="ghost"
+                size="sm"
+                icon="i-lucide-refresh-cw"
+                :loading="loading"
+                label="刷新"
+                @click="load()"
+              />
+            </div>
+          </template>
+
+          <div class="h-full min-h-0 overflow-auto">
+            <ErrorState
+              v-if="loadError && !loading"
+              :description="loadError"
+              :retry="() => load()"
+            />
+            <LoadingState v-else-if="loading && !templates.length" description="正在加载固件模板…" />
+            <template v-else>
+              <table v-if="templates.length" class="w-full text-sm">
+                <thead class="sticky top-0 z-10 border-b border-default bg-elevated/95 backdrop-blur-sm text-left text-muted">
+                  <tr>
+                    <th class="hidden px-4 py-3 font-medium sm:table-cell">ID</th>
+                    <th class="px-4 py-3 font-medium">名称</th>
+                    <th class="px-4 py-3 font-medium">架构</th>
+                    <th class="hidden px-4 py-3 font-medium lg:table-cell">QEMU</th>
+                    <th class="hidden px-4 py-3 font-medium md:table-cell">内存</th>
+                    <th class="hidden px-4 py-3 font-medium xl:table-cell">SSH 默认</th>
+                    <th class="px-4 py-3 font-medium text-right">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="row in templates"
+                    :key="row.id"
+                    class="table-row-interactive border-b border-muted group"
+                  >
+                    <td class="hidden px-4 py-3 text-toned sm:table-cell">{{ row.id }}</td>
+                    <td class="px-4 py-3">
+                      <div class="font-medium text-highlighted group-hover:text-primary transition-colors">
+                        {{ row.name }}
+                      </div>
+                      <div class="mt-0.5 font-mono text-[11px] text-dimmed lg:hidden">
+                        {{ row.qemu_binary }}
+                      </div>
+                    </td>
+                    <td class="px-4 py-3">
+                      <UBadge variant="subtle" color="primary" size="sm">{{ row.arch }}</UBadge>
+                    </td>
+                    <td class="hidden px-4 py-3 font-mono text-xs text-toned lg:table-cell">
+                      {{ row.qemu_binary }}
+                    </td>
+                    <td class="hidden px-4 py-3 tabular-nums md:table-cell">{{ row.ram_size }} MB</td>
+                    <td class="hidden px-4 py-3 font-mono text-xs xl:table-cell">{{ row.guest_ssh_host }}</td>
+                    <td class="px-4 py-3">
+                      <div class="flex justify-end gap-1">
+                        <UTooltip text="编辑模板">
+                          <UButton
+                            size="sm"
+                            variant="soft"
+                            color="neutral"
+                            icon="i-lucide-pencil"
+                            label="编辑"
+                            @click="openEdit(row)"
+                          />
+                        </UTooltip>
+                        <UTooltip text="删除模板">
+                          <UButton
+                            size="sm"
+                            variant="soft"
+                            color="error"
+                            icon="i-lucide-trash-2"
+                            square
+                            @click="askRemove(row)"
+                          />
+                        </UTooltip>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+              <EmptyState
+                v-else
+                title="暂无模板"
+                description="创建固件模板以定义 QEMU 机器类型、内核与 SSH 默认值。"
+                icon="i-lucide-cpu"
               >
-                <td class="px-4 py-3 text-toned">{{ row.id }}</td>
-                <td class="px-4 py-3 font-medium text-highlighted">{{ row.name }}</td>
-                <td class="px-4 py-3">
-                  <UBadge variant="subtle" color="neutral" size="sm">{{ row.arch }}</UBadge>
-                </td>
-                <td class="px-4 py-3 font-mono text-xs text-toned">{{ row.qemu_binary }}</td>
-                <td class="px-4 py-3">{{ row.ram_size }} MB</td>
-                <td class="px-4 py-3 font-mono text-xs">{{ row.guest_ssh_host }}</td>
-                <td class="px-4 py-3">
-                  <div class="flex justify-end gap-1">
-                    <UButton size="sm" variant="soft" color="neutral" label="编辑" @click="openEdit(row)" />
-                    <UButton size="sm" variant="soft" color="error" label="删除" @click="remove(row)" />
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-          <EmptyState
-            v-if="!loading && !templates.length"
-            title="暂无模板"
-            description="创建固件模板以定义 QEMU 机器类型、内核与 SSH 默认值。"
-          >
-            <template #action>
-              <UButton label="新建模板" icon="i-lucide-plus" @click="openCreate" />
+                <template #action>
+                  <UButton label="新建模板" icon="i-lucide-plus" @click="openCreate" />
+                </template>
+              </EmptyState>
             </template>
-          </EmptyState>
-          <div v-if="loading" class="flex justify-center py-12">
-            <UIcon name="i-lucide-loader-circle" class="size-6 animate-spin text-muted" />
           </div>
-        </div>
-      </UCard>
+        </UCard>
+      </PageMotion>
 
       <UModal v-model:open="showDialog" :title="editingId ? '编辑模板' : '新建模板'" :ui="{ content: 'sm:max-w-2xl' }">
         <template #body>
@@ -172,7 +231,25 @@
         <template #footer>
           <div class="flex justify-end gap-2">
             <UButton color="neutral" variant="ghost" label="取消" @click="showDialog = false" />
-            <UButton label="保存" :loading="saving" @click="save" />
+            <UButton label="保存" icon="i-lucide-save" :loading="saving" @click="save" />
+          </div>
+        </template>
+      </UModal>
+
+      <UModal v-model:open="confirmDeleteOpen" title="删除模板" description="此操作不可恢复">
+        <template #body>
+          <UAlert
+            color="error"
+            variant="subtle"
+            icon="i-lucide-triangle-alert"
+            title="确认删除模板"
+            :description="`将删除模板「${pendingDelete?.name || ''}」，已创建的实例不受影响。`"
+          />
+        </template>
+        <template #footer>
+          <div class="flex justify-end gap-2">
+            <UButton color="neutral" variant="ghost" label="取消" @click="confirmDeleteOpen = false" />
+            <UButton color="error" label="确认删除" icon="i-lucide-trash-2" :loading="deleting" @click="confirmRemove" />
           </div>
         </template>
       </UModal>
@@ -196,6 +273,9 @@ import {
 } from "@/api/endpoints";
 import type { Template, TemplateInput } from "@/api/types";
 import EmptyState from "@/components/EmptyState.vue";
+import ErrorState from "@/components/ErrorState.vue";
+import LoadingState from "@/components/LoadingState.vue";
+import PageMotion from "@/components/PageMotion.vue";
 import TaskCenter from "@/components/TaskCenter.vue";
 import { toastError, toastSuccess } from "@/utils/toast";
 
@@ -233,10 +313,14 @@ const archOptions = [
 
 const templates = ref<Template[]>([]);
 const loading = ref(false);
+const loadError = ref("");
 const saving = ref(false);
+const deleting = ref(false);
 const showDialog = ref(false);
 const editingId = ref<number | null>(null);
 const archFilter = ref<string>("");
+const confirmDeleteOpen = ref(false);
+const pendingDelete = ref<Template | null>(null);
 
 const cpuOptions = ref<string[]>([]);
 const displayedCpuOptions = ref<string[]>([]);
@@ -453,6 +537,9 @@ async function load() {
   loading.value = true;
   try {
     templates.value = await fetchTemplates(archFilter.value || undefined);
+    loadError.value = "";
+  } catch (e: unknown) {
+    loadError.value = e instanceof Error ? e.message : "加载模板失败";
   } finally {
     loading.value = false;
   }
@@ -497,14 +584,25 @@ async function save() {
   }
 }
 
-async function remove(row: Template) {
-  if (!window.confirm(`确定删除模板「${row.name}」？`)) return;
+function askRemove(row: Template) {
+  pendingDelete.value = row;
+  confirmDeleteOpen.value = true;
+}
+
+async function confirmRemove() {
+  const row = pendingDelete.value;
+  if (!row) return;
+  deleting.value = true;
   try {
     await deleteTemplate(row.id);
     toastSuccess("已删除");
+    confirmDeleteOpen.value = false;
+    pendingDelete.value = null;
     await load();
-  } catch {
-    /* cancelled */
+  } catch (e: unknown) {
+    toastError(e instanceof Error ? e.message : "删除失败");
+  } finally {
+    deleting.value = false;
   }
 }
 
