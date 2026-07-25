@@ -48,4 +48,4 @@ cd backend
 .venv/bin/pip install -r requirements.txt   # 含 -e ../third_party/iot-tools
 ```
 
-系统依赖：`ssh`、`scp`；访客机密码认证需 `sshpass`（`apt install sshpass`）。
+Python 依赖：`asyncssh`（由 `pip install -e` 自动安装）。传输为 legacy SCP（`use_sftp=False`），无需系统 `scp`/`sshpass`。

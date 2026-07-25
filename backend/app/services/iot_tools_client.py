@@ -1,9 +1,9 @@
 """
 iot-tools 集成客户端（子项目 third_party/iot-tools）。
 
-- 可独立 CLI：`iot-tools scp ...`
-- FSEMS 双栏传输：通过本模块调用同一套指令逻辑
-- 认证/端口通过环境变量注入，与 FSEMS 访客机配置一致
+- CLI：`iot-tools scp ...`（内部 asyncssh + use_sftp=False，等同 scp -O）
+- FSEMS 双栏：子进程调用 CLI，注入 IOT_TOOLS_SSH_* 环境变量
+- 无需 sshpass
 """
 
 from __future__ import annotations
@@ -59,10 +59,11 @@ def build_iot_env(
     ssh_port = str(port if port is not None else 22)
     env["IOT_TOOLS_SSH_PORT"] = ssh_port
 
-    # None → 使用 FSEMS 配置；始终写入，便于 OpenWrt 空密码 + sshpass
+    # 始终写入，含空字符串（OpenWrt 空密码）；由 iot-tools/asyncssh 自动认证
     if password is None:
         password = settings.FSEMS_GUEST_SSH_PASSWORD
     env["IOT_TOOLS_SSH_PASSWORD"] = password if password is not None else ""
+    env["IOT_TOOLS_SSH_USER"] = settings.FSEMS_GUEST_SSH_USER or "root"
 
     return env
 

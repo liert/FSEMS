@@ -36,8 +36,9 @@ Vue 3 + TS + Element Plus + Xterm.js | FastAPI + SQLAlchemy + aiosqlite + Celery
 - 用途：简化指令——双栏 SCP（默认）、ELF NEEDED 依赖拷贝、符号查找等
 - 安装：`pip install -e third_party/iot-tools`（`requirements.txt` 已含）
 - FSEMS 封装：`backend/app/services/iot_tools_client.py`
-- 传输任务：`backend/app/tasks/file_transfer.py`（优先 iot-tools，失败回退 asyncssh）
-- 访客密码：环境变量 `IOT_TOOLS_SSH_PASSWORD`（client 自动注入）；需系统包 `sshpass`
+- 传输任务：`backend/app/tasks/file_transfer.py`（**仅** iot-tools CLI）
+- iot-tools 内部：**asyncssh + use_sftp=False**（legacy SCP / OpenWrt）；密码 `IOT_TOOLS_SSH_PASSWORD` 自动注入，**无需 sshpass**
+- 在线 guest VFS：FSEMS `ssh_service` 仍直接用 asyncssh（算法 profile 与 iot-tools 对齐）
 
 ---
 

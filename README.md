@@ -42,15 +42,14 @@ backend/.venv/bin/pip install -r backend/requirements.txt
 
 ### iot-tools 子项目
 
-[iot-tools](https://github.com/liert/iot-tools) 位于 `third_party/iot-tools`，与 FSEMS **一起开发**，也可单独作为 CLI 使用。双栏文件传输默认走 iot-tools（legacy `scp -O`，推送时解析 ELF 依赖）；不可用时回退 asyncssh。
+[iot-tools](https://github.com/liert/iot-tools) 位于 `third_party/iot-tools`，与 FSEMS **一起开发**，也可单独 CLI 使用。双栏传输只走 iot-tools；其内部用 **asyncssh legacy SCP**（`use_sftp=False`，对齐 `scp -O`），密码自动注入，无需 sshpass。FSEMS 在线目录浏览仍直接用 asyncssh。
 
 ```bash
-# 开发时改子项目后重装
 backend/.venv/bin/pip install -e third_party/iot-tools
 backend/.venv/bin/iot-tools scp --help
 ```
 
-密码认证需安装 `sshpass`。详见 [`third_party/README.md`](third_party/README.md)。
+详见 [`third_party/README.md`](third_party/README.md)。
 
 固件文件放入 `data/kernels/` 与 `data/rootfs/`（生产环境 `/var/fsems/kernels/`、`/var/fsems/rootfs/`）。支持 ARMv8、MIPS、MIPSEL、x86_64 等多架构。
 
