@@ -1,13 +1,13 @@
 <template>
-  <header class="page-header">
-    <div class="page-header-main">
-      <h1 class="page-title">{{ title }}</h1>
-      <p v-if="description" class="page-desc">{{ description }}</p>
+  <div class="flex flex-wrap items-start justify-between gap-4">
+    <div class="min-w-0">
+      <h1 class="text-xl font-semibold tracking-tight text-highlighted sm:text-2xl">{{ title }}</h1>
+      <p v-if="description" class="mt-1 max-w-2xl text-sm text-muted">{{ description }}</p>
     </div>
-    <div v-if="$slots.actions" class="page-header-actions">
+    <div v-if="$slots.actions" class="flex flex-wrap items-center gap-2">
       <slot name="actions" />
     </div>
-  </header>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -16,40 +16,3 @@ defineProps<{
   description?: string;
 }>();
 </script>
-
-<style scoped>
-.page-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-
-.page-title {
-  margin: 0;
-  font-size: 1.65rem;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  color: var(--fsems-text);
-}
-
-.page-desc {
-  margin: 8px 0 0;
-  color: var(--fsems-text-muted);
-  font-size: 0.92rem;
-  line-height: 1.55;
-  max-width: 720px;
-}
-
-html.light .page-desc {
-  color: var(--fsems-text-dim);
-}
-
-.page-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-</style>

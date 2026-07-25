@@ -21,7 +21,19 @@ class Settings(BaseSettings):
     API_PORT: int = 8000
     FSEMS_WORKSPACE: str = ""
     FSEMS_MNT_DIR: str = ""
+    FSEMS_KERNELS_DIR: str = ""
+    FSEMS_ROOTFS_DIR: str = ""
     LOGS_DIR: str = ""
+    OPENWRT_DOWNLOAD_BASE: str = "https://downloads.openwrt.org"
+
+    # MCP Streamable HTTP（Agent 管理接口）
+    MCP_ENABLED: bool = True
+    MCP_HOST: str = "127.0.0.1"
+    MCP_PORT: int = 8001
+    MCP_PATH: str = "/mcp"
+    MCP_STATELESS: bool = True
+    MCP_JSON_RESPONSE: bool = False
+    MCP_TOKEN: str = ""  # 非空时要求 Authorization: Bearer <token>
 
     FSEMS_BRIDGE: str = "br_fsems"
     QEMU_SERIAL_DIR: str = "/tmp"
@@ -81,6 +93,24 @@ class Settings(BaseSettings):
             return "/var/fsems/logs"
         return str((_REPO_ROOT / "data" / "logs").resolve())
 
+    @field_validator("FSEMS_KERNELS_DIR", mode="before")
+    @classmethod
+    def default_kernels_dir(cls, v: str) -> str:
+        if v:
+            if v.startswith("./"):
+                return str((_REPO_ROOT / v.removeprefix("./")).resolve())
+            return v
+        return str((_REPO_ROOT / "data" / "kernels").resolve())
+
+    @field_validator("FSEMS_ROOTFS_DIR", mode="before")
+    @classmethod
+    def default_rootfs_dir(cls, v: str) -> str:
+        if v:
+            if v.startswith("./"):
+                return str((_REPO_ROOT / v.removeprefix("./")).resolve())
+            return v
+        return str((_REPO_ROOT / "data" / "rootfs").resolve())
+
     @property
     def fsems_user(self) -> str:
         import os
@@ -91,12 +121,22 @@ class Settings(BaseSettings):
     def workspace_path(self) -> Path:
         return Path(self.FSEMS_WORKSPACE).resolve()
 
+    @property
+    def kernels_path(self) -> Path:
+        return Path(self.FSEMS_KERNELS_DIR).resolve()
+
+    @property
+    def rootfs_path(self) -> Path:
+        return Path(self.FSEMS_ROOTFS_DIR).resolve()
+
     def offline_mount_path(self, instance_id: str) -> Path:
         return (Path(self.FSEMS_MNT_DIR) / instance_id).resolve()
 
     def ensure_dirs(self) -> None:
         self.workspace_path.mkdir(parents=True, exist_ok=True)
         Path(self.FSEMS_MNT_DIR).mkdir(parents=True, exist_ok=True)
+        self.kernels_path.mkdir(parents=True, exist_ok=True)
+        self.rootfs_path.mkdir(parents=True, exist_ok=True)
         db_path = self.database_path
         if db_path:
             db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -113,4 +153,25 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    """读取 .env 后合并 data/settings.override.json 中的可编辑覆盖。"""
+    base = Settings()
+    try:
+        from app.core.settings_store import load_overrides
+
+        overrides = load_overrides()
+    except Exception:
+        overrides = {}
+    if not overrides:
+        return base
+    # 仅应用 Settings 已声明的字段
+    known = set(Settings.model_fields.keys())
+    clean = {k: v for k, v in overrides.items() if k in known}
+    if not clean:
+        return base
+    return base.model_copy(update=clean)
+
+
+def reload_settings() -> Settings:
+    """保存设置后清除缓存并重新加载。"""
+    get_settings.cache_clear()
+    return get_settings()

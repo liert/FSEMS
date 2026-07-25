@@ -1,10 +1,76 @@
 import request, { unwrap } from "./request";
-import type { ApiResponse, Instance, InstanceDetail, InstanceList, Template, TemplateInput, TokenData, BackendLogs, FrontendLogs, HostDirListing, GuestDirListing, TransferTask, TaskStatus, DriveExpandResult, Snapshot, SnapshotList, SnapshotTaskResponse, HostUploadResult } from "./types";
+import type { ApiResponse, InstanceDetail, InstanceList, Template, TemplateInput, TokenData, BackendLogs, FrontendLogs, HostDirListing, GuestDirListing, TransferTask, TaskStatus, DriveExpandResult, SnapshotList, SnapshotTaskResponse, HostUploadResult } from "./types";
 
 export function login(username: string, password: string) {
   return unwrap(
     request.post<ApiResponse<TokenData>>("/auth/login", { username, password })
   );
+}
+
+export interface SystemSettings {
+  workspace: string;
+  kernels_dir: string;
+  rootfs_dir: string;
+  mnt_dir: string;
+  logs_dir: string;
+  database_path: string | null;
+  bridge: string;
+  boot_timeout_sec: number;
+  qemu_serial_dir: string;
+  fsems_user: string;
+  guest_ssh_user: string;
+  guest_ssh_password_set: boolean;
+  openwrt_download_base: string;
+  mcp_enabled: boolean;
+  mcp_path: string;
+  mcp_host: string;
+  mcp_port: number;
+  mcp_stateless: boolean;
+  mcp_auth_required: boolean;
+  mcp_standalone_hint: string;
+  admin_user: string;
+  jwt_expire_seconds: number;
+  api_host: string;
+  api_port: number;
+  redis_url_masked: string;
+  override_file?: string;
+  restart_hint?: string;
+}
+
+/** 可写字段；密码/token/redis 留空表示不修改 */
+export interface SystemSettingsUpdate {
+  workspace?: string;
+  kernels_dir?: string;
+  rootfs_dir?: string;
+  mnt_dir?: string;
+  logs_dir?: string;
+  bridge?: string;
+  boot_timeout_sec?: number;
+  qemu_serial_dir?: string;
+  fsems_user?: string;
+  guest_ssh_user?: string;
+  guest_ssh_password?: string;
+  openwrt_download_base?: string;
+  mcp_enabled?: boolean;
+  mcp_path?: string;
+  mcp_host?: string;
+  mcp_port?: number;
+  mcp_stateless?: boolean;
+  mcp_token?: string;
+  admin_user?: string;
+  admin_password?: string;
+  jwt_expire_seconds?: number;
+  api_host?: string;
+  api_port?: number;
+  redis_url?: string;
+}
+
+export function fetchSystemSettings() {
+  return unwrap(request.get<ApiResponse<SystemSettings>>("/settings/system"));
+}
+
+export function updateSystemSettings(body: SystemSettingsUpdate) {
+  return unwrap(request.put<ApiResponse<SystemSettings>>("/settings/system", body));
 }
 
 export function fetchTemplates(arch?: string) {
@@ -23,6 +89,70 @@ export function updateTemplate(id: number, body: Partial<TemplateInput>) {
 
 export function deleteTemplate(id: number) {
   return unwrap(request.delete<ApiResponse<void>>(`/templates/${id}`));
+}
+
+/** 按 QEMU 二进制探测可用 CPU 型号（`qemu -cpu help`） */
+export function fetchQemuCpuModels(qemuBinary: string) {
+  return unwrap(
+    request.get<ApiResponse<{ qemu_binary: string; resolved_path: string; cpus: string[] }>>(
+      "/templates/meta/cpu-models",
+      { params: { qemu_binary: qemuBinary }, timeout: 20000 }
+    )
+  );
+}
+
+export interface OpenWrtKernelItem {
+  name: string;
+  url: string;
+  size: number | null;
+  local: boolean;
+  local_path: string | null;
+}
+
+export function fetchOpenWrtVersions(force = false) {
+  return unwrap(
+    request.get<ApiResponse<{ versions: string[]; arch_targets: Record<string, string> }>>(
+      "/templates/meta/openwrt/versions",
+      { params: { force }, timeout: 30000 }
+    )
+  );
+}
+
+export function fetchOpenWrtKernels(version: string, arch: string, force = false) {
+  return unwrap(
+    request.get<
+      ApiResponse<{
+        version: string;
+        arch: string;
+        target: string;
+        kernels_dir: string;
+        kernels: OpenWrtKernelItem[];
+      }>
+    >("/templates/meta/openwrt/kernels", {
+      params: { version, arch, force },
+      timeout: 30000,
+    })
+  );
+}
+
+export function fetchLocalKernels() {
+  return unwrap(
+    request.get<
+      ApiResponse<{ kernels_dir: string; kernels: { name: string; path: string; size: number }[] }>
+    >("/templates/meta/openwrt/local-kernels")
+  );
+}
+
+export function downloadOpenWrtKernel(version: string, arch: string, filename: string) {
+  return unwrap(
+    request.post<
+      ApiResponse<{ name: string; path: string; size: number; downloaded: boolean; url: string }>
+    >(
+      "/templates/meta/openwrt/download",
+      { version, arch, filename },
+      { timeout: 600000 }
+    )
+  );
 }
 
 export function fetchInstances(page = 1, limit = 20) {
@@ -84,9 +214,21 @@ export function expandInstanceDrive(
   );
 }
 
-export function deleteInstance(id: string) {
+/** 创建后修改/重新部署自定义 RootFS（解压可能较久） */
+export function updateCustomRootfs(instanceId: string, rootfsPath: string | null) {
   return unwrap(
-    request.delete<ApiResponse<void>>(`/instances/${id}`)
+    request.put<ApiResponse<InstanceDetail>>(
+      `/instances/${instanceId}/custom-rootfs`,
+      { rootfs_path: rootfsPath },
+      { timeout: 600000 }
+    )
+  );
+}
+
+export function deleteInstance(id: string) {
+  // 清理工作空间/磁盘可能较久，单独放宽超时
+  return unwrap(
+    request.delete<ApiResponse<void>>(`/instances/${id}`, { timeout: 300000 })
   );
 }
 

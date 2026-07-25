@@ -15,10 +15,17 @@ from app.services.ssh_service import GuestPathNotFoundError
 logger = logging.getLogger(__name__)
 
 _mount_locks: dict[str, asyncio.Lock] = {}
+# debugfs -R "ls -l" 示例：
+#   12   40755 (2)      0      0    4096 14-May-2026 06:42 bin
+# mode 字段为八进制（40755），不能按十进制 int()。
 _DEBUGFS_LS = re.compile(
-    r"^\s*\d+\s+(\d+)\s+\(\d+\)\s+\d+\s+\d+\s+(\d+)\s+.+\s+(.+)$"
+    r"^\s*\d+\s+([0-7]+)\s+\(\d+\)\s+\d+\s+\d+\s+(\d+)\s+"
+    r"(?:(\d{1,2}-\w{3}-\d{4})\s+(\d{1,2}:\d{2})\s+)?"
+    r"(.+)$"
 )
+_S_IFMT = 0o170000
 _S_IFDIR = 0o040000
+_S_IFLNK = 0o120000
 
 
 def _lock_for(instance_id: str) -> asyncio.Lock:
@@ -120,19 +127,40 @@ def list_offline_guest_directory(mount_root: Path, guest_path: str) -> list[dict
     return entries
 
 
-def _parse_debugfs_ls_line(line: str) -> tuple[str, bool, int] | None:
+def _parse_debugfs_mtime(date_s: str | None, time_s: str | None) -> int:
+    """将 debugfs 日期时间转为 unix 秒；解析失败返回 0。"""
+    if not date_s or not time_s:
+        return 0
+    from datetime import datetime
+
+    for fmt in ("%d-%b-%Y %H:%M", "%d-%B-%Y %H:%M"):
+        try:
+            return int(datetime.strptime(f"{date_s} {time_s}", fmt).timestamp())
+        except ValueError:
+            continue
+    return 0
+
+
+def _parse_debugfs_ls_line(line: str) -> tuple[str, bool, int, int] | None:
+    """
+    解析 debugfs ls -l 一行。
+    返回 (name, is_dir, size, mtime_unix)。
+    """
     match = _DEBUGFS_LS.match(line.strip())
     if not match:
         return None
-    mode = int(match.group(1))
+    # debugfs 权限位是八进制字面量
+    mode = int(match.group(1), 8)
     size = int(match.group(2))
-    name = match.group(3).strip()
+    mtime = _parse_debugfs_mtime(match.group(3), match.group(4))
+    name = match.group(5).strip()
     if name in (".", ".."):
         return None
     if " -> " in name:
         name = name.split(" -> ", 1)[0].strip()
-    is_dir = (mode & 0o170000) == _S_IFDIR
-    return name, is_dir, size
+    file_type = mode & _S_IFMT
+    is_dir = file_type == _S_IFDIR
+    return name, is_dir, size, mtime
 
 
 def _list_debugfs_guest_directory_sync(drive_path: Path, guest_path: str) -> list[dict]:
@@ -157,7 +185,7 @@ def _list_debugfs_guest_directory_sync(drive_path: Path, guest_path: str) -> lis
         parsed = _parse_debugfs_ls_line(line)
         if not parsed:
             continue
-        name, is_dir, size = parsed
+        name, is_dir, size, mtime = parsed
         if parent_guest == "/":
             entry_path = f"/{name}"
         else:
@@ -167,8 +195,8 @@ def _list_debugfs_guest_directory_sync(drive_path: Path, guest_path: str) -> lis
                 "name": name,
                 "path": entry_path,
                 "is_dir": is_dir,
-                "size": size,
-                "mtime": 0,
+                "size": 0 if is_dir else size,
+                "mtime": mtime,
             }
         )
     return entries
@@ -179,20 +207,22 @@ async def list_guest_offline_directory(
     drive_path: Path,
     guest_path: str,
 ) -> list[dict]:
-    """离线列举访客机目录：优先解压目录 → debugfs → guestmount。"""
+    """
+    离线列举访客机目录：始终读取虚拟机启动磁盘 rootfs.img。
+
+    顺序：debugfs（raw ext4）→ guestmount。
+    不会使用自定义 RootFS 解压目录（workspace/.../rootfs），该目录仅作辅助数据，
+    与 QEMU 启动盘无关。
+    """
     drive_path = drive_path.resolve()
     if not drive_path.is_file():
         raise FileNotFoundError(f"Drive image not found: {drive_path}")
-
-    extracted = extracted_rootfs_dir(instance_id)
-    if extracted.is_dir() and any(extracted.iterdir()):
-        logger.info("离线 VFS 使用解压目录: %s", extracted)
-        return list_offline_guest_directory(extracted, guest_path)
 
     errors: list[str] = []
 
     if _tool_path("debugfs"):
         try:
+            logger.info("离线 VFS 使用启动盘 debugfs: %s path=%s", drive_path, guest_path)
             return await asyncio.to_thread(_list_debugfs_guest_directory_sync, drive_path, guest_path)
         except GuestPathNotFoundError:
             raise
@@ -202,6 +232,7 @@ async def list_guest_offline_directory(
 
     if _tool_path("guestmount"):
         try:
+            logger.info("离线 VFS 使用启动盘 guestmount: %s path=%s", drive_path, guest_path)
             mount_root = await ensure_offline_mount(instance_id, drive_path)
             return list_offline_guest_directory(mount_root, guest_path)
         except GuestPathNotFoundError:

@@ -1,0 +1,16 @@
+@import "tailwindcss";
+@import "@nuxt/ui";
+
+@theme {
+  --font-sans: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+}
+
+:root {
+  --ui-radius: 0.5rem;
+}
+
+/* xterm 终端区域 */
+.xterm-viewport {
+  overflow-y: auto !important;
+}

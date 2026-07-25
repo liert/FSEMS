@@ -1,7 +1,9 @@
 from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.v1.router import api_router
 from app.core.config import get_settings
@@ -60,6 +62,29 @@ def ensure_redis_service(settings) -> bool:
     return False
 
 
+class McpTokenMiddleware(BaseHTTPMiddleware):
+    """可选：MCP 路径要求 Bearer token（MCP_TOKEN 非空时启用）。"""
+
+    def __init__(self, app, path_prefix: str, token: str):
+        super().__init__(app)
+        self.path_prefix = path_prefix.rstrip("/") or "/mcp"
+        self.token = token
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if path == self.path_prefix or path.startswith(self.path_prefix + "/"):
+            auth = request.headers.get("authorization") or ""
+            expected = f"Bearer {self.token}"
+            if auth != expected:
+                return Response(
+                    content='{"jsonrpc":"2.0","error":{"code":-32001,"message":"Unauthorized"},"id":null}',
+                    status_code=401,
+                    media_type="application/json",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+        return await call_next(request)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     settings = get_settings()
@@ -90,9 +115,14 @@ async def lifespan(_app: FastAPI):
     else:
         logger.warning("由于 Redis 离线，已跳过自动运行 Celery 服务。")
 
-    yield
+    # 3. MCP Streamable HTTP session manager
+    async with AsyncExitStack() as stack:
+        if settings.MCP_ENABLED and getattr(_app.state, "mcp_session_manager", None) is not None:
+            logger.info("启动 MCP Streamable HTTP session manager (path=%s)", settings.MCP_PATH)
+            await stack.enter_async_context(_app.state.mcp_session_manager.run())
+        yield
 
-    # 3. 优雅关闭 Celery 工作进程
+    # 4. 优雅关闭 Celery 工作进程
     celery_proc = getattr(_app.state, "celery_proc", None)
     if celery_proc:
         logger.info("正在关闭后台 Celery 队列服务...")
@@ -125,16 +155,62 @@ def create_app() -> FastAPI:
     )
     app.include_router(api_router)
 
+    # --- MCP Streamable HTTP ---
+    if settings.MCP_ENABLED:
+        from app.mcp_server import get_mcp, mcp_asgi_app
+
+        get_mcp()  # 注册 tools/resources
+        mcp_app = mcp_asgi_app()
+        # session manager 由 streamable_http_app() 懒创建
+        app.state.mcp_session_manager = get_mcp().session_manager
+        mount_path = settings.MCP_PATH.rstrip("/") or "/mcp"
+        from mcp.server.fastmcp.server import StreamableHTTPASGIApp
+        from starlette.routing import Route
+
+        _streamable = StreamableHTTPASGIApp(get_mcp().session_manager)
+
+        class _McpEndpoint:
+            """
+            将 /mcp 与 /mcp/ 均映射到 Streamable HTTP，避免 Mount 的 307 重定向
+            （部分 MCP 客户端不会自动跟随 POST 重定向）。
+            """
+
+            def __init__(self, inner, prefix: str):
+                self.inner = inner
+                self.prefix = prefix
+
+            async def __call__(self, scope, receive, send):
+                if scope["type"] in ("http", "websocket"):
+                    scope = dict(scope)
+                    scope["path"] = "/"
+                    scope["raw_path"] = b"/"
+                    scope["root_path"] = (scope.get("root_path") or "") + self.prefix
+                await self.inner(scope, receive, send)
+
+        endpoint = _McpEndpoint(_streamable, mount_path)
+        # 插到最前，优先于其它路由
+        app.router.routes.insert(0, Route(mount_path, endpoint=endpoint, methods=["GET", "POST", "DELETE"]))
+        app.router.routes.insert(0, Route(mount_path + "/", endpoint=endpoint, methods=["GET", "POST", "DELETE"]))
+        if settings.MCP_TOKEN:
+            app.add_middleware(McpTokenMiddleware, path_prefix=mount_path, token=settings.MCP_TOKEN)
+        logger.info("MCP Streamable HTTP endpoints: %s and %s/", mount_path, mount_path)
+
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
     @app.get("/", response_model=ApiResponse[dict])
     async def root() -> ApiResponse[dict]:
-        return ApiResponse(data={"service": "FSEMS"}, message="OK")
+        data = {"service": "FSEMS"}
+        if settings.MCP_ENABLED:
+            data["mcp"] = {
+                "transport": "streamable-http",
+                "path": settings.MCP_PATH,
+                "auth": bool(settings.MCP_TOKEN),
+            }
+        return ApiResponse(data=data, message="OK")
 
     return app
 
 
 app = create_app()
-# Trigger reload: Redis started

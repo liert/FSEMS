@@ -1,72 +1,32 @@
 <template>
-  <el-tag :type="statusTagType(status)" size="small" effect="dark" class="status-badge">
-    <span v-if="showDot" class="status-dot" :class="dotClass" />
-    {{ statusLabel(status) }}
-  </el-tag>
+  <UBadge :color="color" variant="subtle" size="sm">
+    <span class="inline-flex items-center gap-1.5">
+      <span class="size-1.5 rounded-full" :class="dotClass" />
+      {{ label }}
+    </span>
+  </UBadge>
 </template>
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { statusLabel, statusTagType } from "@/utils/instanceStatus";
+import { statusLabel } from "@/utils/instanceStatus";
 
-const props = withDefaults(
-  defineProps<{
-    status: string;
-    showDot?: boolean;
-  }>(),
-  { showDot: true }
-);
+const props = defineProps<{ status: string }>();
+
+const label = computed(() => statusLabel(props.status));
+
+const color = computed(() => {
+  if (props.status === "RUNNING") return "success" as const;
+  if (props.status === "STARTING") return "warning" as const;
+  if (props.status === "STOPPED") return "neutral" as const;
+  if (props.status === "STOPPING") return "warning" as const;
+  return "error" as const;
+});
 
 const dotClass = computed(() => {
-  if (props.status === "RUNNING") return "dot-success";
-  if (props.status === "STARTING" || props.status === "STOPPING") return "dot-warning";
-  if (props.status === "STOPPED") return "dot-muted";
-  return "dot-danger";
+  if (props.status === "RUNNING") return "bg-success";
+  if (props.status === "STARTING" || props.status === "STOPPING") return "bg-warning animate-pulse";
+  if (props.status === "STOPPED") return "bg-muted";
+  return "bg-error";
 });
 </script>
-
-<style scoped>
-.status-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-}
-
-.status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.dot-success {
-  background: #34d399;
-  box-shadow: 0 0 8px rgba(52, 211, 153, 0.7);
-}
-
-.dot-warning {
-  background: #fbbf24;
-  box-shadow: 0 0 8px rgba(251, 191, 36, 0.6);
-  animation: pulse 1.4s ease-in-out infinite;
-}
-
-.dot-muted {
-  background: #64748b;
-}
-
-.dot-danger {
-  background: #f87171;
-}
-
-@keyframes pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.45;
-  }
-}
-</style>

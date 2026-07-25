@@ -1,131 +1,125 @@
 <template>
-  <div class="page-stack log-page">
-    <PageHeader
-      title="系统日志"
-      description="查看 FastAPI / Celery 后端日志与前端客户端异常上报，便于联调与故障排查。"
-    />
+  <UDashboardPanel id="logs">
+    <template #header>
+      <UDashboardNavbar title="系统日志">
+        <template #leading>
+          <UDashboardSidebarCollapse />
+        </template>
+        <template #right>
+          <TaskCenter />
+        </template>
+      </UDashboardNavbar>
+    </template>
 
-    <section class="glass-card content-panel log-card">
-      <el-tabs v-model="activeTab" class="log-tabs" @tab-change="onTabChange">
-        <el-tab-pane label="后端系统日志" name="backend">
-          <div class="toolbar-row">
-            <div class="toolbar-left">
-              <el-radio-group v-model="backendType" @change="loadBackendLogs">
-                <el-radio-button value="fastapi">FastAPI</el-radio-button>
-                <el-radio-button value="celery">Celery</el-radio-button>
-              </el-radio-group>
-
-              <span class="tool-label">行数</span>
-              <el-select v-model="backendLines" style="width: 110px" @change="loadBackendLogs">
-                <el-option :value="50" label="50" />
-                <el-option :value="100" label="100" />
-                <el-option :value="200" label="200" />
-                <el-option :value="500" label="500" />
-                <el-option :value="1000" label="1000" />
-              </el-select>
-
-              <el-input
-                v-model="backendSearch"
-                placeholder="过滤日志内容…"
-                style="width: 220px"
-                clearable
-                :prefix-icon="Search"
-              />
-            </div>
-
-            <div class="toolbar-right">
-              <el-checkbox v-model="autoScroll">自动滚动</el-checkbox>
-              <el-button type="primary" :loading="loadingBackend" @click="loadBackendLogs">
-                刷新
-              </el-button>
-            </div>
-          </div>
-
-          <div ref="terminalEl" class="terminal-container">
-            <template v-if="filteredBackendLines.length > 0">
-              <div v-for="(line, idx) in filteredBackendLines" :key="idx" class="terminal-line">
-                <span class="line-num">{{ idx + 1 }}</span>
-                <span class="line-content" :class="getLineClass(line)">{{ line }}</span>
+    <template #body>
+      <UTabs v-model="activeTab" :items="tabItems" class="flex h-full min-h-0 flex-col gap-3" :ui="{ content: 'flex-1 min-h-0' }">
+        <template #backend>
+          <div class="flex h-full min-h-0 flex-col gap-3">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="flex flex-wrap items-center gap-2">
+                <UButtonGroup>
+                  <UButton
+                    :variant="backendType === 'fastapi' ? 'solid' : 'soft'"
+                    color="neutral"
+                    label="FastAPI"
+                    size="sm"
+                    @click="backendType = 'fastapi'; loadBackendLogs()"
+                  />
+                  <UButton
+                    :variant="backendType === 'celery' ? 'solid' : 'soft'"
+                    color="neutral"
+                    label="Celery"
+                    size="sm"
+                    @click="backendType = 'celery'; loadBackendLogs()"
+                  />
+                </UButtonGroup>
+                <USelect
+                  v-model="backendLines"
+                  :items="[50, 100, 200, 500, 1000]"
+                  class="w-28"
+                  @update:model-value="loadBackendLogs"
+                />
+                <UInput v-model="backendSearch" icon="i-lucide-search" placeholder="过滤日志…" class="w-52" />
               </div>
-            </template>
-            <div v-else class="empty-terminal">
-              {{ loadingBackend ? "正在加载日志…" : "暂无匹配的日志记录" }}
+              <div class="flex items-center gap-3">
+                <UCheckbox v-model="autoScroll" label="自动滚动" />
+                <UButton label="刷新" :loading="loadingBackend" size="sm" @click="loadBackendLogs" />
+              </div>
+            </div>
+            <div
+              ref="terminalEl"
+              class="min-h-0 flex-1 overflow-auto rounded-lg border border-default bg-inverted p-4 font-mono text-xs text-inverted"
+            >
+              <template v-if="filteredBackendLines.length">
+                <div v-for="(line, idx) in filteredBackendLines" :key="idx" class="flex gap-3">
+                  <span class="w-10 shrink-0 text-right text-dimmed select-none">{{ idx + 1 }}</span>
+                  <span class="min-w-0 flex-1 break-all whitespace-pre-wrap" :class="lineClass(line)">{{ line }}</span>
+                </div>
+              </template>
+              <div v-else class="flex h-full items-center justify-center text-dimmed">
+                {{ loadingBackend ? "正在加载日志…" : "暂无匹配的日志记录" }}
+              </div>
+            </div>
+            <p class="shrink-0 text-xs text-dimmed font-mono">
+              共 {{ backendTotalLines }} 行 · 已载入末尾 {{ backendLines }} 行
+            </p>
+          </div>
+        </template>
+
+        <template #frontend>
+          <div class="flex h-full min-h-0 flex-col gap-3">
+            <div class="flex justify-between gap-2">
+              <UButton color="error" variant="soft" size="sm" label="触发测试错误" @click="triggerTestError" />
+              <UButton size="sm" label="刷新" :loading="loadingFrontend" @click="loadFrontendLogs" />
+            </div>
+            <div class="min-h-0 flex-1 overflow-auto rounded-lg border border-default">
+              <table class="w-full text-sm">
+                <thead class="sticky top-0 bg-elevated text-left text-muted">
+                  <tr>
+                    <th class="px-3 py-2">ID</th>
+                    <th class="px-3 py-2">级别</th>
+                    <th class="px-3 py-2">消息</th>
+                    <th class="px-3 py-2">URL</th>
+                    <th class="px-3 py-2">时间</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="row in frontendLogs" :key="row.id" class="border-t border-muted">
+                    <td class="px-3 py-2">{{ row.id }}</td>
+                    <td class="px-3 py-2">
+                      <UBadge :color="levelColor(row.level)" variant="subtle" size="sm">
+                        {{ String(row.level).toUpperCase() }}
+                      </UBadge>
+                    </td>
+                    <td class="max-w-xs truncate px-3 py-2" :title="row.message">{{ row.message }}</td>
+                    <td class="max-w-xs truncate px-3 py-2 font-mono text-xs" :title="row.url">{{ row.url }}</td>
+                    <td class="px-3 py-2 text-xs text-muted">{{ formatTime(row.created_at) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <p v-if="!loadingFrontend && !frontendLogs.length" class="py-10 text-center text-muted">
+                暂无上报日志
+              </p>
             </div>
           </div>
-          <div class="terminal-footer">
-            共 {{ backendTotalLines }} 行 · 已载入末尾 {{ backendLines }} 行
-          </div>
-        </el-tab-pane>
-
-        <el-tab-pane label="前端客户端日志" name="frontend">
-          <div class="toolbar-row">
-            <div class="toolbar-left">
-              <el-button type="danger" plain @click="triggerTestError">
-                触发测试错误
-              </el-button>
-            </div>
-            <div class="toolbar-right">
-              <el-button type="primary" :loading="loadingFrontend" @click="loadFrontendLogs">
-                刷新
-              </el-button>
-            </div>
-          </div>
-
-          <div class="table-panel">
-            <el-table :data="frontendLogs" style="width: 100%" v-loading="loadingFrontend" empty-text="暂无上报日志">
-              <el-table-column type="expand">
-                <template #default="{ row }">
-                  <div class="expand-container">
-                    <h4>异常调用栈</h4>
-                    <pre class="stack-trace">{{ row.stack || "无堆栈信息" }}</pre>
-                  </div>
-                </template>
-              </el-table-column>
-
-              <el-table-column prop="id" label="ID" width="70" align="center" />
-              <el-table-column prop="level" label="级别" width="100">
-                <template #default="{ row }">
-                  <el-tag :type="getFrontendLevelType(row.level)" size="small" effect="dark">
-                    {{ String(row.level).toUpperCase() }}
-                  </el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column prop="message" label="消息" min-width="250" show-overflow-tooltip />
-              <el-table-column prop="url" label="页面 URL" min-width="200" show-overflow-tooltip />
-              <el-table-column prop="created_at" label="时间" width="180">
-                <template #default="{ row }">
-                  {{ formatTime(row.created_at) }}
-                </template>
-              </el-table-column>
-            </el-table>
-          </div>
-
-          <div class="pagination-container">
-            <el-pagination
-              v-model:current-page="frontendPage"
-              v-model:page-size="frontendLimit"
-              :page-sizes="[10, 20, 50, 100]"
-              layout="total, sizes, prev, pager, next"
-              :total="frontendTotal"
-              @size-change="loadFrontendLogs"
-              @current-change="loadFrontendLogs"
-            />
-          </div>
-        </el-tab-pane>
-      </el-tabs>
-    </section>
-  </div>
+        </template>
+      </UTabs>
+    </template>
+  </UDashboardPanel>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { ElMessage } from "element-plus";
-import { Search } from "@element-plus/icons-vue";
 import { fetchBackendLogs, fetchFrontendLogs } from "@/api/endpoints";
 import type { FrontendLog } from "@/api/types";
-import PageHeader from "@/components/PageHeader.vue";
+import TaskCenter from "@/components/TaskCenter.vue";
+import { toastError, toastWarning } from "@/utils/toast";
 
 const activeTab = ref("backend");
+const tabItems = [
+  { label: "后端系统日志", value: "backend", slot: "backend" as const },
+  { label: "前端客户端日志", value: "frontend", slot: "frontend" as const },
+];
 
 const backendType = ref<"fastapi" | "celery">("fastapi");
 const backendLines = ref(100);
@@ -138,31 +132,27 @@ const terminalEl = ref<HTMLElement | null>(null);
 let backendTimer: ReturnType<typeof setInterval> | null = null;
 
 const filteredBackendLines = computed(() => {
-  const chronoLines = [...backendLinesData.value].reverse();
-  if (!backendSearch.value) return chronoLines;
+  const chrono = [...backendLinesData.value].reverse();
+  if (!backendSearch.value) return chrono;
   const q = backendSearch.value.toLowerCase();
-  return chronoLines.filter((line) => line.toLowerCase().includes(q));
+  return chrono.filter((line) => line.toLowerCase().includes(q));
 });
 
 const frontendLogs = ref<FrontendLog[]>([]);
 const loadingFrontend = ref(false);
-const frontendTotal = ref(0);
-const frontendPage = ref(1);
-const frontendLimit = ref(20);
 
-function getLineClass(line: string) {
-  if (line.includes("ERROR") || line.includes("CRITICAL")) return "text-danger";
+function lineClass(line: string) {
+  if (line.includes("ERROR") || line.includes("CRITICAL")) return "text-error";
   if (line.includes("WARNING") || line.includes("WARN")) return "text-warning";
   if (line.includes("INFO")) return "text-info";
-  if (line.includes("DEBUG")) return "text-muted";
-  return "";
+  return "text-toned";
 }
 
-function getFrontendLevelType(level: string) {
+function levelColor(level: string) {
   const l = String(level).toUpperCase();
-  if (l === "ERROR") return "danger";
-  if (l === "WARN" || l === "WARNING") return "warning";
-  return "info";
+  if (l === "ERROR") return "error" as const;
+  if (l === "WARN" || l === "WARNING") return "warning" as const;
+  return "info" as const;
 }
 
 async function loadBackendLogs() {
@@ -171,15 +161,12 @@ async function loadBackendLogs() {
     const data = await fetchBackendLogs(backendType.value, backendLines.value, 0);
     backendTotalLines.value = data.total_lines;
     backendLinesData.value = data.lines;
-
     if (autoScroll.value) {
       await nextTick();
-      if (terminalEl.value) {
-        terminalEl.value.scrollTop = terminalEl.value.scrollHeight;
-      }
+      if (terminalEl.value) terminalEl.value.scrollTop = terminalEl.value.scrollHeight;
     }
   } catch (e: unknown) {
-    ElMessage.error(e instanceof Error ? e.message : "获取后端日志失败");
+    toastError(e instanceof Error ? e.message : "获取后端日志失败");
   } finally {
     loadingBackend.value = false;
   }
@@ -188,38 +175,19 @@ async function loadBackendLogs() {
 async function loadFrontendLogs() {
   loadingFrontend.value = true;
   try {
-    const offset = (frontendPage.value - 1) * frontendLimit.value;
-    const data = await fetchFrontendLogs(frontendLimit.value, offset);
+    const data = await fetchFrontendLogs(50, 0);
     frontendLogs.value = data.logs;
-    if (frontendLogs.value.length === 0) {
-      frontendTotal.value = 0;
-    } else {
-      frontendTotal.value = frontendLogs.value[0].id;
-    }
   } catch (e: unknown) {
-    ElMessage.error(e instanceof Error ? e.message : "获取前端日志失败");
+    toastError(e instanceof Error ? e.message : "获取前端日志失败");
   } finally {
     loadingFrontend.value = false;
   }
 }
 
-function onTabChange(tab: string | number) {
-  if (tab === "backend") {
-    loadBackendLogs();
-    startBackendPoll();
-  } else {
-    stopBackendPoll();
-    loadFrontendLogs();
-  }
-}
-
 function startBackendPoll() {
   stopBackendPoll();
-  backendTimer = setInterval(() => {
-    loadBackendLogs();
-  }, 5000);
+  backendTimer = setInterval(() => void loadBackendLogs(), 5000);
 }
-
 function stopBackendPoll() {
   if (backendTimer) {
     clearInterval(backendTimer);
@@ -227,14 +195,22 @@ function stopBackendPoll() {
   }
 }
 
+watch(activeTab, (tab) => {
+  if (tab === "backend") {
+    void loadBackendLogs();
+    startBackendPoll();
+  } else {
+    stopBackendPoll();
+    void loadFrontendLogs();
+  }
+});
+
 function triggerTestError() {
-  ElMessage.warning("正在触发测试错误…");
+  toastWarning("正在触发测试错误…");
   setTimeout(() => {
     throw new Error("这是一个用于测试上报功能的运行时错误日志 (Test Error Log)");
   }, 100);
-  setTimeout(() => {
-    loadFrontendLogs();
-  }, 1200);
+  setTimeout(() => void loadFrontendLogs(), 1200);
 }
 
 function formatTime(utcString: string) {
@@ -246,138 +222,9 @@ function formatTime(utcString: string) {
   }
 }
 
-watch(autoScroll, (val) => {
-  if (val && terminalEl.value) {
-    terminalEl.value.scrollTop = terminalEl.value.scrollHeight;
-  }
-});
-
 onMounted(() => {
-  loadBackendLogs();
+  void loadBackendLogs();
   startBackendPoll();
 });
-
-onUnmounted(() => {
-  stopBackendPoll();
-});
+onUnmounted(stopBackendPoll);
 </script>
-
-<style scoped>
-.log-card {
-  min-height: 0;
-}
-
-.log-tabs :deep(.el-tabs__header) {
-  margin-bottom: 18px;
-}
-
-.tool-label {
-  margin-left: 4px;
-  font-size: 0.85rem;
-  color: var(--fsems-text-dim);
-}
-
-.terminal-container {
-  background: #0d1117;
-  color: #d4d4d4;
-  font-family: var(--fsems-mono);
-  padding: 16px;
-  border-radius: 10px 10px 0 0;
-  height: min(58vh, 620px);
-  overflow-y: auto;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.terminal-line {
-  display: flex;
-  margin-bottom: 2px;
-}
-
-.line-num {
-  width: 42px;
-  color: #4b5563;
-  text-align: right;
-  padding-right: 12px;
-  user-select: none;
-  border-right: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.line-content {
-  padding-left: 12px;
-  white-space: pre-wrap;
-  word-break: break-all;
-  flex: 1;
-}
-
-.empty-terminal {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  height: 100%;
-  color: #6b7280;
-}
-
-.terminal-footer {
-  background: rgba(255, 255, 255, 0.03);
-  color: var(--fsems-text-dim);
-  font-family: var(--fsems-mono);
-  font-size: 0.78rem;
-  padding: 8px 14px;
-  border-radius: 0 0 10px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-top: none;
-  margin-bottom: 8px;
-}
-
-.text-danger {
-  color: #f87171;
-}
-
-.text-warning {
-  color: #fbbf24;
-}
-
-.text-info {
-  color: #38bdf8;
-}
-
-.text-muted {
-  color: #94a3b8;
-}
-
-.expand-container {
-  padding: 12px 20px;
-  background: rgba(255, 255, 255, 0.02);
-  border-left: 3px solid var(--fsems-danger);
-  margin: 8px 0;
-}
-
-.expand-container h4 {
-  margin: 0 0 8px;
-  color: var(--fsems-text);
-  font-size: 0.88rem;
-}
-
-.stack-trace {
-  font-family: var(--fsems-mono);
-  background: #0d1117;
-  color: #f87171;
-  padding: 12px;
-  border-radius: 8px;
-  white-space: pre-wrap;
-  word-break: break-all;
-  font-size: 12px;
-  margin: 0;
-  max-height: 250px;
-  overflow-y: auto;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.pagination-container {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 16px;
-}
-</style>

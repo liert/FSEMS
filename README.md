@@ -40,6 +40,21 @@ sudo ./scripts/dev_start.sh
 
 开发环境也可使用仓库内 `./data/` 路径（见 `.env.example`）。
 
+### MCP（Streamable HTTP）Agent 管理接口
+
+后端默认在 **`/mcp`** 暴露标准 MCP Streamable HTTP 服务，供 Cursor / Claude 等 Agent 管理实例与模板：
+
+```bash
+# 与 API 同进程（默认 MCP_ENABLED=true）
+# 端点: http://127.0.0.1:8000/mcp
+
+# 或独立进程
+cd backend && .venv/bin/python -m app.mcp_server
+# 端点: http://127.0.0.1:8001/mcp
+```
+
+工具包括：`list_instances`、`create_instance`、`instance_action`、`delete_instance`、`list_templates` 等。详见 [`docs/mcp.md`](docs/mcp.md)。
+
 ### Node.js 环境安装（推荐使用 NVM）
 
 前端构建与运行需要 Node.js 24+ 环境，推荐使用 NVM（Node Version Manager）进行安装与管理，以避免与系统自带的 Node 版本冲突：

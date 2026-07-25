@@ -11,7 +11,7 @@ const router = createRouter({
     },
     {
       path: "/",
-      component: () => import("@/layouts/AppShell.vue"),
+      component: () => import("@/layouts/DashboardLayout.vue"),
       children: [
         { path: "", redirect: "/instances" },
         {
@@ -28,6 +28,11 @@ const router = createRouter({
           path: "logs",
           component: () => import("@/views/LogViewer.vue"),
           meta: { title: "系统日志" },
+        },
+        {
+          path: "settings",
+          component: () => import("@/views/Settings.vue"),
+          meta: { title: "系统设置" },
         },
         {
           path: "instances/:id/manage",

@@ -1,22 +1,17 @@
+import "./assets/css/main.css";
 import { createApp } from "vue";
 import { createPinia } from "pinia";
-import ElementPlus from "element-plus";
-import zhCn from "element-plus/dist/locale/zh-cn.mjs";
-import "element-plus/dist/index.css";
-import "element-plus/theme-chalk/dark/css-vars.css";
-import "@/styles/theme.css";
-
-import { applyThemeClass, getStoredTheme } from "@/utils/theme";
-
-applyThemeClass(getStoredTheme());
+import ui from "@nuxt/ui/vue-plugin";
 
 import App from "./App.vue";
 import router from "./router";
 import { reportFrontendLog } from "@/api/endpoints";
+import { applyThemeClass, getStoredTheme } from "@/utils/theme";
+
+applyThemeClass(getStoredTheme());
 
 const app = createApp(App);
 
-// 全端全局异常捕获上报（中文日志，日志等级大写）
 app.config.errorHandler = (err: any, _instance, info) => {
   console.error(err);
   reportFrontendLog({
@@ -28,7 +23,6 @@ app.config.errorHandler = (err: any, _instance, info) => {
 };
 
 window.addEventListener("error", (event) => {
-  // 忽略 Vue 自行处理的错误
   if (event.message.includes("ResizeObserver")) return;
   reportFrontendLog({
     level: "ERROR",
@@ -50,5 +44,5 @@ window.addEventListener("unhandledrejection", (event) => {
 
 app.use(createPinia());
 app.use(router);
-app.use(ElementPlus, { locale: zhCn });
+app.use(ui);
 app.mount("#app");

@@ -75,3 +75,8 @@ class DriveExpandResult(BaseModel):
     stopped_for_expand: bool = False
     restarted: bool = False
     status: str
+
+
+class CustomRootfsUpdate(BaseModel):
+    """创建后修改自定义 RootFS 源路径；空字符串表示清除。"""
+    rootfs_path: str | None = Field(None, max_length=512)

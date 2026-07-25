@@ -8,8 +8,15 @@ export function getStoredTheme(): ThemeMode {
 }
 
 export function applyThemeClass(mode: ThemeMode) {
-  document.documentElement.classList.toggle("dark", mode === "dark");
-  document.documentElement.classList.toggle("light", mode === "light");
+  const root = document.documentElement;
+  root.classList.toggle("dark", mode === "dark");
+  root.classList.toggle("light", mode === "light");
+  // Nuxt UI / Tailwind dark mode uses `.dark` on html
+  if (mode === "light") {
+    root.classList.remove("dark");
+  } else {
+    root.classList.add("dark");
+  }
 }
 
 export function getStoredSidebarCollapsed(): boolean {

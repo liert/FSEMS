@@ -211,6 +211,98 @@ def extract_archive(archive_path: Path, dest_dir: Path) -> None:
             raise ValueError(f"无法确定该文件系统的具体类型，不支持的格式: {archive_path.name}")
 
 
+def deploy_custom_rootfs_dir(inst_workspace: Path, rootfs_path: str) -> Path:
+    """
+    将自定义 RootFS（压缩包或目录）部署到实例 workspace/rootfs。
+    若目标目录已存在会先清空再写入。
+    """
+    import shutil
+
+    custom_rootfs = Path(rootfs_path.strip())
+    if not custom_rootfs.exists():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error_code": "PATH_NOT_FOUND",
+                "message": f"指定的 RootFS 自定义路径不存在: {rootfs_path}",
+            },
+        )
+
+    inst_rootfs_dir = inst_workspace / "rootfs"
+    if inst_rootfs_dir.exists():
+        shutil.rmtree(inst_rootfs_dir, ignore_errors=True)
+    inst_rootfs_dir.mkdir(parents=True, exist_ok=True)
+
+    if custom_rootfs.is_file():
+        logger.info("解包自定义 RootFS: %s -> %s", custom_rootfs, inst_rootfs_dir)
+        extract_archive(custom_rootfs, inst_rootfs_dir)
+    elif custom_rootfs.is_dir():
+        logger.info("拷贝自定义 RootFS 目录: %s -> %s", custom_rootfs, inst_rootfs_dir)
+        shutil.copytree(custom_rootfs, inst_rootfs_dir, symlinks=True, dirs_exist_ok=True)
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error_code": "INVALID_ROOTFS", "message": f"路径既非文件也非目录: {rootfs_path}"},
+        )
+
+    try:
+        fix_absolute_symlinks(inst_rootfs_dir)
+    except Exception as e:
+        logger.warning("自动修复自定义 RootFS 中的绝对路径符号链接失败: %s", e)
+
+    return inst_rootfs_dir
+
+
+async def update_custom_rootfs(
+    session: AsyncSession,
+    instance: Instance,
+    rootfs_path: str | None,
+) -> Instance:
+    """
+    创建后修改/重新部署自定义 RootFS 源路径。
+    传空字符串或 null 表示清除解压目录与源路径记录。
+    """
+    import shutil
+
+    from app.services.guest_fs_offline import release_offline_mount
+
+    settings = get_settings()
+    inst_workspace = Path(settings.FSEMS_WORKSPACE) / instance.id
+    inst_workspace.mkdir(parents=True, exist_ok=True)
+    inst_rootfs_dir = inst_workspace / "rootfs"
+
+    # 离线 VFS 可能挂着该目录，先释放
+    try:
+        await release_offline_mount(instance.id)
+    except Exception as e:
+        logger.warning("更新自定义 RootFS 前卸载离线 VFS 失败 instance=%s: %s", instance.id, e)
+
+    path = (rootfs_path or "").strip()
+    if not path:
+        if inst_rootfs_dir.exists():
+            shutil.rmtree(inst_rootfs_dir, ignore_errors=True)
+        instance.custom_rootfs_path = None
+        await session.commit()
+        await session.refresh(instance, attribute_names=["template"])
+        return instance
+
+    try:
+        deploy_custom_rootfs_dir(inst_workspace, path)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("更新自定义 RootFS 失败 instance=%s: %s", instance.id, e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error_code": "ROOTFS_UPDATE_FAILED", "message": f"部署自定义 RootFS 失败: {e}"},
+        ) from e
+
+    instance.custom_rootfs_path = path
+    await session.commit()
+    await session.refresh(instance, attribute_names=["template"])
+    return instance
+
+
 def fix_absolute_symlinks(rootfs_dir: Path) -> None:
     """
     递归扫描解压出来的 rootfs 目录，将所有绝对路径软链接（符号链接）转换为相对路径软链接，
@@ -367,31 +459,9 @@ async def create_instance(
         # 3. 自动将新生成的自定义网络 IP 写入虚拟机系统的启动盘 /etc/config/network 中
         configure_instance_network(instance_drive_path, guest_ssh_host, gateway_ip)
                 
-        # 4. 用户指定了自定义 rootfs 路径参数（用以快速复制模拟环境，不作为 qemu 启动参数，解包到 workspace/{instance_id}/rootfs 目录下）
+        # 4. 用户指定了自定义 rootfs 路径参数（解包到 workspace/{instance_id}/rootfs）
         if rootfs_path and rootfs_path.strip():
-            custom_rootfs = Path(rootfs_path.strip())
-            if not custom_rootfs.exists():
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail={"error_code": "PATH_NOT_FOUND", "message": f"指定的 RootFS 自定义路径不存在: {rootfs_path}"},
-                )
-            
-            # 创建专属的 rootfs 子文件夹目录
-            inst_rootfs_dir = inst_workspace / "rootfs"
-            inst_rootfs_dir.mkdir(parents=True, exist_ok=True)
-            
-            if custom_rootfs.is_file():
-                logger.info(f"为新实例解包自定义 RootFS 文件到辅助目录: {custom_rootfs} -> {inst_rootfs_dir}")
-                extract_archive(custom_rootfs, inst_rootfs_dir)
-            elif custom_rootfs.is_dir():
-                logger.info(f"拷贝自定义 RootFS 文件夹到辅助目录: {custom_rootfs} -> {inst_rootfs_dir}")
-                shutil.copytree(custom_rootfs, inst_rootfs_dir, symlinks=True, dirs_exist_ok=True)
-
-            # 自动扫描并修复其中的绝对路径软链接为相对路径软链接，防止在宿主机解析失效或越权崩溃
-            try:
-                fix_absolute_symlinks(inst_rootfs_dir)
-            except Exception as e:
-                logger.warning(f"自动修复自定义 RootFS 中的绝对路径符号链接失败: {e}")
+            deploy_custom_rootfs_dir(inst_workspace, rootfs_path.strip())
                 
     except Exception as e:
         logger.error(f"部署实例专属文件系统失败: {e}")

@@ -1,146 +1,70 @@
 <template>
-  <el-popover placement="bottom-end" :width="360" trigger="click">
-    <template #reference>
-      <el-badge :value="taskStore.activeCount" :hidden="taskStore.activeCount === 0" :max="9">
-        <el-button class="icon-action task-center-btn" text>
-          <el-icon><List /></el-icon>
-        </el-button>
-      </el-badge>
+  <UPopover :content="{ align: 'end' }">
+    <UButton color="neutral" variant="ghost" square icon="i-lucide-list-todo">
+      <span
+        v-if="taskStore.activeCount"
+        class="absolute -right-0.5 -top-0.5 flex size-4 items-center justify-center rounded-full bg-primary text-[10px] text-inverted"
+      >
+        {{ taskStore.activeCount }}
+      </span>
+    </UButton>
+    <template #content>
+      <div class="w-80 p-3">
+        <div class="mb-2 flex items-center justify-between">
+          <p class="text-sm font-semibold text-highlighted">后台任务</p>
+          <UBadge v-if="taskStore.activeCount" color="primary" variant="subtle" size="sm">
+            {{ taskStore.activeCount }} 进行中
+          </UBadge>
+        </div>
+        <div v-if="!taskStore.recentTasks.length" class="py-6 text-center text-sm text-muted">
+          暂无任务
+        </div>
+        <ul v-else class="max-h-72 space-y-2 overflow-y-auto">
+          <li
+            v-for="t in taskStore.recentTasks"
+            :key="t.id"
+            class="rounded-lg border border-muted bg-elevated/50 p-2.5"
+          >
+            <div class="flex items-start justify-between gap-2">
+              <div class="min-w-0">
+                <p class="truncate text-sm font-medium text-default">{{ t.label }}</p>
+                <p v-if="t.detail" class="truncate text-xs text-dimmed">{{ t.detail }}</p>
+              </div>
+              <UBadge :color="statusColor(t.status)" variant="subtle" size="sm">
+                {{ statusText(t.status) }}
+              </UBadge>
+            </div>
+            <UProgress
+              v-if="t.status === 'PENDING' || t.status === 'RUNNING'"
+              :model-value="t.progress"
+              size="xs"
+              class="mt-2"
+            />
+            <p v-if="t.errorMsg" class="mt-1 text-xs text-error">{{ t.errorMsg }}</p>
+          </li>
+        </ul>
+      </div>
     </template>
-
-    <div class="task-center">
-      <div class="task-center-head">
-        <span class="task-center-title">后台任务</span>
-        <el-button v-if="taskStore.tasks.length" link type="primary" size="small" @click="taskStore.clearFinished()">
-          清除已完成
-        </el-button>
-      </div>
-
-      <div v-if="!taskStore.recentTasks.length" class="task-empty">
-        暂无进行中的任务
-      </div>
-
-      <ul v-else class="task-list">
-        <li v-for="task in taskStore.recentTasks" :key="task.id" class="task-item">
-          <div class="task-item-head">
-            <span class="task-label">{{ task.label }}</span>
-            <el-tag size="small" :type="statusTag(task.status)" effect="plain">
-              {{ statusText(task.status) }}
-            </el-tag>
-          </div>
-          <p v-if="task.detail" class="task-detail">{{ task.detail }}</p>
-          <el-progress
-            :percentage="task.progress"
-            :stroke-width="8"
-            :status="progressStatus(task.status)"
-            :show-text="true"
-          />
-          <p v-if="task.errorMsg" class="task-error">{{ task.errorMsg }}</p>
-        </li>
-      </ul>
-    </div>
-  </el-popover>
+  </UPopover>
 </template>
 
 <script setup lang="ts">
-import { List } from "@element-plus/icons-vue";
 import { useTaskStore } from "@/stores/tasks";
 
 const taskStore = useTaskStore();
 
-function statusText(status: string) {
-  const map: Record<string, string> = {
-    PENDING: "排队中",
-    RUNNING: "进行中",
-    SUCCESS: "已完成",
-    FAILURE: "失败",
-  };
-  return map[status] || status;
+function statusText(s: string) {
+  if (s === "PENDING") return "排队";
+  if (s === "RUNNING") return "运行中";
+  if (s === "SUCCESS") return "完成";
+  if (s === "FAILURE") return "失败";
+  return s;
 }
 
-function statusTag(status: string) {
-  if (status === "SUCCESS") return "success";
-  if (status === "FAILURE") return "danger";
-  if (status === "RUNNING") return "warning";
-  return "info";
-}
-
-function progressStatus(status: string) {
-  if (status === "SUCCESS") return "success";
-  if (status === "FAILURE") return "exception";
-  return undefined;
+function statusColor(s: string) {
+  if (s === "SUCCESS") return "success" as const;
+  if (s === "FAILURE") return "error" as const;
+  if (s === "RUNNING") return "primary" as const;
+  return "neutral" as const;
 }
 </script>
-
-<style scoped>
-.task-center-btn {
-  font-size: 1.05rem;
-}
-
-.task-center-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 12px;
-}
-
-.task-center-title {
-  font-weight: 600;
-  color: var(--fsems-text);
-}
-
-.task-empty {
-  color: var(--fsems-text-dim);
-  font-size: 0.88rem;
-  padding: 12px 0;
-  text-align: center;
-}
-
-.task-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  max-height: 360px;
-  overflow-y: auto;
-}
-
-.task-item {
-  padding-bottom: 2px;
-  border-bottom: 1px solid var(--fsems-border);
-}
-
-.task-item:last-child {
-  border-bottom: none;
-}
-
-.task-item-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 6px;
-}
-
-.task-label {
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: var(--fsems-text);
-}
-
-.task-detail {
-  margin: 0 0 8px;
-  font-size: 0.78rem;
-  color: var(--fsems-text-dim);
-  word-break: break-all;
-  line-height: 1.4;
-}
-
-.task-error {
-  margin: 6px 0 0;
-  font-size: 0.78rem;
-  color: var(--fsems-danger);
-}
-</style>

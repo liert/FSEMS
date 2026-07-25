@@ -17,6 +17,7 @@ from app.schemas.instance import (
     InstanceOut,
     DriveExpandRequest,
     DriveExpandResult,
+    CustomRootfsUpdate,
 )
 from app.schemas.snapshot import SnapshotCreate, SnapshotListOut, SnapshotOut, SnapshotTaskResponse
 from app.services import instance_service, snapshot_service
@@ -101,6 +102,22 @@ async def expand_instance_drive(
         session, instance, body.expand_mb, body.manage_lifecycle
     )
     return ApiResponse(data=DriveExpandResult(**result), message="Drive expanded")
+
+
+@router.put("/{instance_id}/custom-rootfs", response_model=ApiResponse[InstanceDetailOut])
+async def update_custom_rootfs(
+    instance_id: str,
+    body: CustomRootfsUpdate,
+    _user: str = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[InstanceDetailOut]:
+    """创建后修改自定义 RootFS 源路径并重新解压/拷贝到实例 workspace/rootfs。"""
+    instance = await get_instance(session, instance_id)
+    updated = await instance_service.update_custom_rootfs(session, instance, body.rootfs_path)
+    return ApiResponse(
+        data=InstanceDetailOut(**instance_detail_to_out(updated)),
+        message="Custom RootFS updated",
+    )
 
 
 @router.delete("/{instance_id}", response_model=ApiResponse[dict])
