@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     FSEMS_GUEST_SSH_USER: str = "root"
     FSEMS_GUEST_SSH_PASSWORD: str = ""
 
+    # iot-tools 子模块 CLI（默认 PATH 中的 iot-tools；可填绝对路径）
+    IOT_TOOLS_BIN: str = "iot-tools"
+
     FSEMS_ADMIN_USER: str = "admin"
     FSEMS_ADMIN_PASSWORD: str = "admin"
     SECRET_KEY: str = "change-me-in-production"

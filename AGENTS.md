@@ -29,6 +29,14 @@ QEMU 启动方式参考用户脚本：`/home/kali/openwrt/armv8/start.sh`（TAP 
 
 Vue 3 + TS + Element Plus + Xterm.js | FastAPI + SQLAlchemy + aiosqlite + Celery + Redis | QEMU + TAP
 
+### 子模块 iot-tools
+
+- 路径：`third_party/iot-tools`（https://github.com/liert/iot-tools.git）
+- 用途：智能 SCP（ELF NEEDED 依赖）、符号查找等；后续可继续扩展 IoT 文件/固件操作
+- 克隆：`git clone --recurse-submodules` 或 `git submodule update --init --recursive`
+- 安装：`pip install -r backend/requirements.txt`（含 `-e ../third_party/iot-tools`）
+- 代码入口：`backend/app/services/iot_tools_client.py`
+
 ---
 
 ## 本地开发

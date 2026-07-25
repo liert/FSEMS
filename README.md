@@ -14,6 +14,12 @@
 ## 快速开始
 
 ```bash
+# 克隆时带上子模块（iot-tools）
+git clone --recurse-submodules https://github.com/liert/FSEMS.git
+cd FSEMS
+# 若已克隆未带子模块：
+# git submodule update --init --recursive
+
 # 安装系统依赖
 sudo apt update
 sudo apt install -y qemu-system qemu-utils e2fsprogs bridge-utils uml-utilities libguestfs-tools iptables redis-server
@@ -28,7 +34,17 @@ cp .env.example .env
 # 编辑 .env：至少设置 FSEMS_GUEST_SSH_PASSWORD
 sudo mkdir -p /var/fsems/{data,workspace,kernels,rootfs,mnt}
 sudo chown -R "$USER:$USER" /var/fsems
+
+# 后端依赖（含可编辑安装 third_party/iot-tools）
+python3 -m venv backend/.venv
+backend/.venv/bin/pip install -r backend/requirements.txt
 ```
+
+### iot-tools 子模块
+
+[iot-tools](https://github.com/liert/iot-tools) 以 Git 子模块形式位于 `third_party/iot-tools`，提供 IoT 智能 SCP（ELF + 依赖库拷贝）等能力。后续会继续扩展，FSEMS 通过 `app.services.iot_tools_client` 调用。
+
+详见 [`third_party/README.md`](third_party/README.md)。
 
 固件文件放入 `data/kernels/` 与 `data/rootfs/`（生产环境 `/var/fsems/kernels/`、`/var/fsems/rootfs/`）。支持 ARMv8、MIPS、MIPSEL、x86_64 等多架构。
 
