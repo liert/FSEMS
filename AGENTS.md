@@ -29,13 +29,15 @@ QEMU 启动方式参考用户脚本：`/home/kali/openwrt/armv8/start.sh`（TAP 
 
 Vue 3 + TS + Element Plus + Xterm.js | FastAPI + SQLAlchemy + aiosqlite + Celery + Redis | QEMU + TAP
 
-### 子模块 iot-tools
+### 子项目 iot-tools（一体开发）
 
 - 路径：`third_party/iot-tools`（https://github.com/liert/iot-tools.git）
-- 用途：智能 SCP（ELF NEEDED 依赖）、符号查找等；后续可继续扩展 IoT 文件/固件操作
-- 克隆：`git clone --recurse-submodules` 或 `git submodule update --init --recursive`
-- 安装：`pip install -r backend/requirements.txt`（含 `-e ../third_party/iot-tools`）
-- 代码入口：`backend/app/services/iot_tools_client.py`
+- **在 FSEMS 树内直接改**；问题在 iot-tools 就改 iot-tools；同时可独立 `pip install` / CLI 运行
+- 用途：简化指令——双栏 SCP（默认）、ELF NEEDED 依赖拷贝、符号查找等
+- 安装：`pip install -e third_party/iot-tools`（`requirements.txt` 已含）
+- FSEMS 封装：`backend/app/services/iot_tools_client.py`
+- 传输任务：`backend/app/tasks/file_transfer.py`（优先 iot-tools，失败回退 asyncssh）
+- 访客密码：环境变量 `IOT_TOOLS_SSH_PASSWORD`（client 自动注入）；需系统包 `sshpass`
 
 ---
 
