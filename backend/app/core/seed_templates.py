@@ -50,7 +50,7 @@ def build_seed_templates(settings: Settings) -> list[dict]:
             "arch": "mips",
             "qemu_binary": "qemu-system-mips",
             "machine": "malta",
-            "cpu": "24Kc",
+            "cpu": "24Kf",
             "kernel_path": k("openwrt-malta-be-generic-kernel.bin"),
             "drive_path": r("openwrt-malta-be-generic-ext4-rootfs.img.gz"),
             "kernel_append": "root=/dev/sda rootfstype=ext4 rootwait console=ttyS0,38400n8",

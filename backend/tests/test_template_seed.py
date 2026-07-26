@@ -77,6 +77,7 @@ def test_mips_seed_uses_configured_firmware_dirs_and_malta_devices():
     templates = build_seed_templates(settings)
     mips = next(t for t in templates if t["name"] == "OpenWrt MIPS (malta)")
 
+    assert mips["cpu"] == "24Kf"
     assert mips["kernel_path"] == "/opt/fsems/kernels/openwrt-malta-be-generic-kernel.bin"
     assert mips["drive_path"] == "/opt/fsems/rootfs/openwrt-malta-be-generic-ext4-rootfs.img.gz"
     assert mips["kernel_append"] == (

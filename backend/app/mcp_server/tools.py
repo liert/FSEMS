@@ -65,6 +65,7 @@ async def list_templates(arch: str | None = None) -> dict[str, Any]:
                         "qemu_binary": t.qemu_binary,
                         "machine": t.machine,
                         "cpu": t.cpu,
+                        "effective_cpu": instance_service.qemu_manager.effective_cpu(t),
                         "ram_size": t.ram_size,
                         "kernel_path": t.kernel_path,
                         "drive_path": t.drive_path,

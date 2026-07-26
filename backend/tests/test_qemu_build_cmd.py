@@ -62,6 +62,7 @@ def test_malta_build_cmd_uses_ide_pcnet_and_ttys0(monkeypatch, tmp_path):
     cmd = build_cmd(instance, template)
     assert "file=%s,format=raw,if=ide,index=0,media=disk" % instance.drive_path in cmd
     assert "pcnet,netdev=net0" in cmd
+    assert cmd[cmd.index("-cpu") + 1] == "24Kf"
     assert "virtio-blk-pci,drive=hd" not in cmd
     assert "virtio-net-pci,netdev=net0" not in cmd
     assert cmd[cmd.index("-append") + 1] == (
