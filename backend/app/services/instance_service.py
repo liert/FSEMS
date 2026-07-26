@@ -88,10 +88,16 @@ async def list_instances(session: AsyncSession, page: int, limit: int) -> tuple[
         if inst.status in RUNNING_STATUSES:
             if not inst.pid or not qemu_manager.is_pid_alive(inst.pid):
                 logger.warning(f"检测到实例 {inst.id} 进程 {inst.pid} 已关闭，正在自动清理并更新状态...")
+                diagnostics = await qemu_manager.instance_diagnostics(inst, inst.template, serial_lines=40)
                 await qemu_manager.cleanup_instance_resources(inst)
                 inst.status = "STOPPED"
                 inst.pid = None
                 inst.tap_name = None
+                exited = diagnostics.get("qemu_exit")
+                if exited:
+                    inst.error_msg = f"QEMU exited with code {exited.get('returncode')}"
+                elif not inst.error_msg:
+                    inst.error_msg = "QEMU process exited; inspect instance diagnostics"
                 inst.updated_at = datetime.utcnow()
                 dirty = True
     if dirty:
@@ -117,10 +123,16 @@ async def get_instance(session: AsyncSession, instance_id: str) -> Instance:
     if instance.status in RUNNING_STATUSES:
         if not instance.pid or not qemu_manager.is_pid_alive(instance.pid):
             logger.warning(f"检测到实例 {instance.id} 进程 {instance.pid} 已关闭，正在自动清理并更新状态...")
+            diagnostics = await qemu_manager.instance_diagnostics(instance, instance.template, serial_lines=40)
             await qemu_manager.cleanup_instance_resources(instance)
             instance.status = "STOPPED"
             instance.pid = None
             instance.tap_name = None
+            exited = diagnostics.get("qemu_exit")
+            if exited:
+                instance.error_msg = f"QEMU exited with code {exited.get('returncode')}"
+            elif not instance.error_msg:
+                instance.error_msg = "QEMU process exited; inspect instance diagnostics"
             instance.updated_at = datetime.utcnow()
             await session.commit()
 
@@ -211,6 +223,38 @@ def extract_archive(archive_path: Path, dest_dir: Path) -> None:
             raise ValueError(f"无法确定该文件系统的具体类型，不支持的格式: {archive_path.name}")
 
 
+def _is_within(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
+def _ignore_uncopyable(directory: str, names: list[str]) -> set[str]:
+    """
+    copytree 的 ignore 回调：跳过设备节点 / FIFO / 套接字。
+
+    shutil 遇到这些会直接抛错中断整个复制，而 rootfs 的 dev/ 下很常见
+    （dev/console、dev/initctl 等）。非 root 进程本来也无法重建它们，
+    访客机启动后由 devtmpfs 自行创建，跳过不影响使用。
+    """
+    skipped: set[str] = set()
+    for name in names:
+        p = Path(directory) / name
+        # 符号链接按链接本身复制，即使指向特殊文件也没问题
+        if p.is_symlink():
+            continue
+        try:
+            if p.is_fifo() or p.is_socket() or p.is_block_device() or p.is_char_device():
+                skipped.add(name)
+        except OSError:
+            continue
+    if skipped:
+        logger.warning("跳过无法复制的特殊文件 %s: %s", directory, ", ".join(sorted(skipped)))
+    return skipped
+
+
 def deploy_custom_rootfs_dir(inst_workspace: Path, rootfs_path: str) -> Path:
     """
     将自定义 RootFS（压缩包或目录）部署到实例 workspace/rootfs。
@@ -229,6 +273,38 @@ def deploy_custom_rootfs_dir(inst_workspace: Path, rootfs_path: str) -> Path:
         )
 
     inst_rootfs_dir = inst_workspace / "rootfs"
+
+    # 必须在 rmtree 之前校验来源：部署会先清空目标目录，若来源落在目标之内
+    # （常见于直接粘贴文件管理器里复制到的当前目录），来源会连同目标一起被删掉。
+    src_resolved = custom_rootfs.resolve()
+    dst_resolved = inst_rootfs_dir.resolve()
+    if _is_within(src_resolved, dst_resolved):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error_code": "INVALID_ROOTFS_SOURCE",
+                "message": (
+                    "RootFS 来源不能位于该实例的 rootfs 解压目录内部；"
+                    "部署会先清空该目录，来源会被一并删除。请把来源放到其他位置。"
+                ),
+            },
+        )
+    if _is_within(dst_resolved, src_resolved):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error_code": "INVALID_ROOTFS_SOURCE",
+                "message": (
+                    "RootFS 来源不能是该实例 rootfs 解压目录的上级目录，否则会自我嵌套复制。"
+                ),
+            },
+        )
+    if not custom_rootfs.is_file() and not custom_rootfs.is_dir():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error_code": "INVALID_ROOTFS", "message": f"路径既非文件也非目录: {rootfs_path}"},
+        )
+
     if inst_rootfs_dir.exists():
         shutil.rmtree(inst_rootfs_dir, ignore_errors=True)
     inst_rootfs_dir.mkdir(parents=True, exist_ok=True)
@@ -236,13 +312,14 @@ def deploy_custom_rootfs_dir(inst_workspace: Path, rootfs_path: str) -> Path:
     if custom_rootfs.is_file():
         logger.info("解包自定义 RootFS: %s -> %s", custom_rootfs, inst_rootfs_dir)
         extract_archive(custom_rootfs, inst_rootfs_dir)
-    elif custom_rootfs.is_dir():
-        logger.info("拷贝自定义 RootFS 目录: %s -> %s", custom_rootfs, inst_rootfs_dir)
-        shutil.copytree(custom_rootfs, inst_rootfs_dir, symlinks=True, dirs_exist_ok=True)
     else:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error_code": "INVALID_ROOTFS", "message": f"路径既非文件也非目录: {rootfs_path}"},
+        logger.info("拷贝自定义 RootFS 目录: %s -> %s", custom_rootfs, inst_rootfs_dir)
+        shutil.copytree(
+            custom_rootfs,
+            inst_rootfs_dir,
+            symlinks=True,
+            dirs_exist_ok=True,
+            ignore=_ignore_uncopyable,
         )
 
     try:
@@ -303,38 +380,61 @@ async def update_custom_rootfs(
     return instance
 
 
-def fix_absolute_symlinks(rootfs_dir: Path) -> None:
+def fix_absolute_symlinks(rootfs_dir: Path) -> int:
     """
-    递归扫描解压出来的 rootfs 目录，将所有绝对路径软链接（符号链接）转换为相对路径软链接，
-    防止在宿主机上由于直接解析至宿主机根目录 / 导致链接失效或越权错误，同时保持在虚拟机内部的正确性。
+    把 rootfs 内的符号链接改写成在宿主机上也指向 rootfs 内部的相对链接。
+
+    解压出来的 rootfs 里 `/bin/sh -> /bin/busybox` 这类绝对链接，在宿主机上会解析到
+    宿主机自己的 /bin/busybox；带 `..` 的链接还可能落到 rootfs 之外，让 host shell
+    读到宿主机文件。这里统一按 chroot 语义重新计算目标（`..` 在 rootfs 根部截断），
+    再写回相对路径，使其在宿主机浏览、host shell 与访客机内部指向同一个文件。
+
+    绝对链接和会逃逸的相对链接都会被处理；已经正确的相对链接原样保留。
+    返回被改写的链接数量。
     """
-    rootfs_dir = rootfs_dir.resolve()
-    logger.info(f"开始扫描并自动修复自定义 RootFS 中的绝对路径软链接: {rootfs_dir}")
     import os
-    fixed_count = 0
-    
-    # 采用 os.walk 快速递归（不跟随软链接以防无限循环）
+
+    rootfs_dir = rootfs_dir.resolve()
+    logger.info("开始修复自定义 RootFS 中的符号链接: %s", rootfs_dir)
+    fixed = 0
+    failed = 0
+
+    # followlinks=False：不跟随软链接，避免环形链接导致无限递归
     for root, dirs, files in os.walk(rootfs_dir, followlinks=False):
-        for name in files + dirs:
+        link_dir_rel = os.path.relpath(root, rootfs_dir)
+        for name in dirs + files:
             path = Path(root) / name
-            if path.is_symlink():
+            if not path.is_symlink():
+                continue
+            target = ""
+            try:
+                target = os.readlink(path)
+                if not target:
+                    continue
+
+                # 按 chroot 解释链接目标：join 遇到绝对路径会丢弃前面的部分，
+                # normpath 会把绝对路径开头多余的 `..` 截断在根部——正是访客机内的语义。
+                chroot_target = os.path.normpath(os.path.join("/", link_dir_rel, target))
+                landing = rootfs_dir / chroot_target.lstrip("/")
+                new_target = os.path.relpath(landing, path.parent)
+                if new_target == target:
+                    continue
+
+                # 尽量保留属主，便于之后重新打包成镜像
+                st = path.lstat()
+                path.unlink()
+                path.symlink_to(new_target)
                 try:
-                    target = os.readlink(path)
-                    # 匹配指向以 / 开头的绝对符号链接
-                    if target.startswith("/"):
-                        # 计算目标在当前 rootfs 中的绝对位置
-                        target_abs_path = rootfs_dir / target.lstrip("/")
-                        # 计算相对于软链接所在父目录的相对路径
-                        relative_target = os.path.relpath(target_abs_path, path.parent)
-                        
-                        # 断开原链接，重新创建为相对符号链接
-                        path.unlink()
-                        path.symlink_to(relative_target)
-                        fixed_count += 1
-                except Exception as e:
-                    logger.warning(f"修复符号链接失败 {path} -> {target}: {e}")
-                    
-    logger.info(f"绝对符号链接修复完毕，成功处理了 {fixed_count} 个链接文件")
+                    os.lchown(path, st.st_uid, st.st_gid)
+                except OSError:
+                    pass
+                fixed += 1
+            except Exception as e:
+                failed += 1
+                logger.warning("修复符号链接失败 %s -> %s: %s", path, target or "?", e)
+
+    logger.info("符号链接修复完毕：改写 %d 个%s", fixed, f"，失败 {failed} 个" if failed else "")
+    return fixed
 
 
 def configure_instance_network(img_path: Path, guest_ip: str, gateway_ip: str) -> None:
@@ -377,6 +477,20 @@ config interface 'lan'
         Path(temp_path).unlink(missing_ok=True)
 
 
+def deploy_instance_drive(source: Path, destination: Path) -> None:
+    """部署模板启动盘，支持 gzip 压缩镜像和未压缩 raw 镜像。"""
+    import gzip
+
+    with source.open("rb") as probe:
+        is_gzip = probe.read(2) == b"\x1f\x8b"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if is_gzip:
+        with gzip.open(source, "rb") as f_in, destination.open("wb") as f_out:
+            shutil.copyfileobj(f_in, f_out)
+    else:
+        shutil.copy2(source, destination)
+
+
 async def create_instance(
     session: AsyncSession,
     name: str,
@@ -406,12 +520,9 @@ async def create_instance(
                 detail={"error_code": "DEFAULT_ROOTFS_MISSING", "message": f"模板预设磁盘文件系统不存在: {default_rootfs_gz}"},
             )
         
-        # 始终把默认模板对应的 .img.gz 解压作为该实例专属的启动磁盘镜像 rootfs.img
-        import gzip
+        # 支持 gzip 压缩镜像和未压缩 raw 镜像，生成实例专属启动盘。
         logger.info(f"为新实例部署专属 QEMU 启动磁盘: {default_rootfs_gz} -> {instance_drive_path}")
-        with gzip.open(default_rootfs_gz, "rb") as f_in:
-            with open(instance_drive_path, "wb") as f_out:
-                shutil.copyfileobj(f_in, f_out)
+        deploy_instance_drive(default_rootfs_gz, instance_drive_path)
         
         # 2. 分配唯一的 IP 地址与网桥名
         # 查询所有已存在的实例，以计算新实例的网络属性
@@ -497,31 +608,55 @@ async def create_instance(
 
 
 
-async def _apply_boot_result(session: AsyncSession, instance_id: str, ok: bool) -> None:
+async def _apply_boot_result(
+    session: AsyncSession,
+    instance_id: str,
+    expected_pid: int,
+    ok: bool,
+) -> None:
     instance = await get_instance(session, instance_id)
+    # 忽略旧启动 watcher，避免它覆盖一次新的启动尝试。
+    if instance.pid != expected_pid:
+        logger.info(
+            "忽略过期启动结果 instance=%s expected_pid=%s current_pid=%s",
+            instance_id,
+            expected_pid,
+            instance.pid,
+        )
+        return
     if ok:
         instance.status = "RUNNING"
         instance.error_msg = None
     else:
+        diagnostics = await qemu_manager.instance_diagnostics(instance, instance.template, serial_lines=80)
+        exited = diagnostics.get("qemu_exit")
+        if exited:
+            error_msg = f"QEMU exited with code {exited.get('returncode')}"
+        elif diagnostics.get("serial_tail"):
+            error_msg = "Guest SSH timeout; inspect serial diagnostics"
+        else:
+            error_msg = "Guest SSH timeout; no serial output captured"
         await qemu_manager.cleanup_instance_resources(instance)
         instance.status = "STOPPED"
         instance.pid = None
         instance.tap_name = None
-        instance.error_msg = "Boot timeout"
+        instance.error_msg = error_msg
     instance.updated_at = datetime.utcnow()
     await session.commit()
 
 
-async def _boot_watch(session_factory, instance_id: str) -> None:
+async def _boot_watch(session_factory, instance_id: str, expected_pid: int) -> None:
     settings = get_settings()
     async with session_factory() as session:
         instance = await get_instance(session, instance_id)
+        if instance.pid != expected_pid:
+            return
         template = instance.template
         host = instance.guest_ssh_host or template.guest_ssh_host
         port = template.guest_ssh_port
         ok = await qemu_manager.wait_boot(host, port, settings.BOOT_TIMEOUT_SEC)
     async with session_factory() as session:
-        await _apply_boot_result(session, instance_id, ok)
+        await _apply_boot_result(session, instance_id, expected_pid, ok)
 
 
 async def perform_action(
@@ -577,10 +712,11 @@ async def perform_action(
         kernel = Path(template.kernel_path)
         drive = Path(instance.drive_path or template.drive_path)
         if not kernel.exists() or not drive.exists():
+            missing = "kernel" if not kernel.exists() else "drive"
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
-                    "error_code": "INSTANCE_BOOT_TIMEOUT",
+                    "error_code": f"{missing.upper()}_NOT_FOUND",
                     "message": f"Kernel or drive missing: {kernel} / {drive}",
                 },
             )
@@ -599,7 +735,7 @@ async def perform_action(
             await session.commit()
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error_code": "TAP_SETUP_FAILED", "message": str(exc)},
+                detail={"error_code": "QEMU_LAUNCH_FAILED", "message": str(exc)},
             ) from exc
 
         from app.core.database import SessionLocal
@@ -608,19 +744,24 @@ async def perform_action(
             host = instance.guest_ssh_host or template.guest_ssh_host
             port = template.guest_ssh_port
             ok = await qemu_manager.wait_boot(host, port, settings.BOOT_TIMEOUT_SEC)
-            await _apply_boot_result(session, instance.id, ok)
+            await _apply_boot_result(session, instance.id, pid, ok)
             instance = await get_instance(session, instance.id)
         else:
-            asyncio.create_task(_boot_watch(SessionLocal, instance.id))
+            asyncio.create_task(_boot_watch(SessionLocal, instance.id, pid))
         await session.refresh(instance, attribute_names=["template"])
         return instance
 
     if action == "stop":
         if instance.status not in RUNNING_STATUSES:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={"error_code": "INSTANCE_STATE_CONFLICT", "message": "Not running"},
-            )
+            # MCP 自动化需要幂等停止：即使状态已停止，也清理残留 TAP/socket。
+            await qemu_manager.cleanup_instance_resources(instance, allow_sigkill=allow_sigkill)
+            instance.status = "STOPPED"
+            instance.pid = None
+            instance.tap_name = None
+            instance.updated_at = datetime.utcnow()
+            await session.commit()
+            await session.refresh(instance, attribute_names=["template"])
+            return instance
         instance.status = "STOPPING"
         await session.commit()
         try:

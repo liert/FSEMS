@@ -7,6 +7,9 @@ class FileEntry(BaseModel):
     is_dir: bool
     size: int
     mtime: int
+    # 符号链接信息：rootfs 里大量条目是指向 busybox 的链接，展示出来便于辨认
+    is_link: bool = False
+    link_target: str | None = None
 
 
 class HostDirListing(BaseModel):
@@ -46,6 +49,18 @@ class GuestFsOpRequest(BaseModel):
 
 
 class GuestFsOpResult(BaseModel):
+    op: str
+    path: str
+    dest_path: str | None = None
+
+
+class HostFsOpRequest(BaseModel):
+    op: str  # mkdir, delete, rename
+    path: str
+    dest_path: str | None = None
+
+
+class HostFsOpResult(BaseModel):
     op: str
     path: str
     dest_path: str | None = None

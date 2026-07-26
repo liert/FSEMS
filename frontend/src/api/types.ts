@@ -92,7 +92,8 @@ export interface SnapshotTaskResponse {
   snapshot_id?: string | null;
 }
 
-export type TemplateInput = Omit<Template, "id">;
+/** 提交时 extra_args 统一规范成字符串（读取侧可能是 null） */
+export type TemplateInput = Omit<Template, "id" | "extra_args"> & { extra_args: string };
 
 export interface InstanceList {
   total: number;
@@ -124,6 +125,9 @@ export interface FileEntry {
   is_dir: boolean;
   size: number;
   mtime: number;
+  /** 符号链接标记；rootfs 内大量条目是指向 busybox 的链接 */
+  is_link?: boolean;
+  link_target?: string | null;
 }
 
 export interface HostDirListing {

@@ -371,6 +371,11 @@ function isDeleteDisabled(row: Instance) {
   );
 }
 
+/** 生命周期操作在途的实例 id；轮询响应不得覆盖这些行的状态 */
+const pendingActionIds = new Set<string>();
+/** 列表请求序号，用于丢弃过期响应 */
+let listSeq = 0;
+
 function patchInstanceStatus(id: string, status: string) {
   const idx = instances.value.findIndex((i) => i.id === id);
   if (idx < 0) return;
@@ -378,10 +383,13 @@ function patchInstanceStatus(id: string, status: string) {
 }
 
 function onStatusOptimistic(id: string, status: string) {
+  // 标记为「操作在途」，期间不让后台轮询的旧响应把乐观状态覆盖回去
+  pendingActionIds.add(id);
   patchInstanceStatus(id, status);
 }
 
 function onStatusChanged(id: string, status: string) {
+  pendingActionIds.delete(id);
   patchInstanceStatus(id, status);
   syncStatusPolling();
 }
@@ -392,17 +400,24 @@ function onActionDone() {
 }
 
 async function load(silent = false) {
+  const seq = ++listSeq;
   if (!silent) loading.value = true;
   try {
     const data = await fetchInstances();
-    instances.value = data.list;
+    if (seq !== listSeq) return; // 丢弃过期响应
+    instances.value = data.list.map((item) => {
+      if (!pendingActionIds.has(item.id)) return item;
+      const local = instances.value.find((i) => i.id === item.id);
+      return local ? { ...item, status: local.status } : item;
+    });
     loadError.value = "";
   } catch (e: unknown) {
+    if (seq !== listSeq) return;
     if (!silent) {
       loadError.value = e instanceof Error ? e.message : "加载实例失败";
     }
   } finally {
-    if (!silent) loading.value = false;
+    if (!silent && seq === listSeq) loading.value = false;
   }
 }
 

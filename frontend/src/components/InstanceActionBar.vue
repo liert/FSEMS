@@ -153,6 +153,7 @@ async function run(action: InstanceLifecycleAction) {
   if (action === "reset" && resetDisabled.value) return;
 
   const labels = { start: "启动", stop: "停止", reset: "重启" } as const;
+  const previousStatus = props.status;
   busyAction.value = action;
 
   // 乐观 UI：按钮 loading + 状态点动画
@@ -170,6 +171,8 @@ async function run(action: InstanceLifecycleAction) {
     toastSuccess(`已下发${labels[action]}指令`);
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : `${labels[action]}失败`;
+    // 回滚乐观状态，否则状态徽章会一直停在「启动中」直到轮询兜底纠正
+    emit("status-changed", previousStatus);
     emit("error", action, msg);
     toastError(msg);
   } finally {

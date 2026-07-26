@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { login as apiLogin } from "@/api/endpoints";
+import { useTaskStore } from "@/stores/tasks";
 
 export const useAuthStore = defineStore("auth", () => {
   const token = ref(localStorage.getItem("fsems_token") || "");
@@ -17,6 +18,8 @@ export const useAuthStore = defineStore("auth", () => {
   }
 
   function logout() {
+    // 先停掉后台任务轮询，否则定时器会继续用失效 token 打 401
+    useTaskStore().stopAll();
     token.value = "";
     username.value = "";
     localStorage.removeItem("fsems_token");

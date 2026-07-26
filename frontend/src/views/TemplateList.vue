@@ -139,12 +139,13 @@
               <UFormField label="名称" class="sm:col-span-2">
                 <UInput v-model="form.name" placeholder="模板显示名称" class="w-full" />
               </UFormField>
-              <UFormField label="架构">
+              <UFormField label="架构" help="列表中没有的架构可直接输入后选择「创建」">
                 <USelectMenu
                   v-model="form.arch"
-                  :items="['aarch64', 'arm', 'mips', 'mipsel', 'x86_64', 'i386']"
+                  :items="archChoices"
                   create-item
                   class="w-full"
+                  @create="onArchCreate"
                   @update:model-value="onArchChange"
                 />
               </UFormField>
@@ -154,14 +155,14 @@
               <UFormField label="Machine">
                 <UInput v-model="form.machine" class="w-full" />
               </UFormField>
-              <UFormField label="CPU">
+              <UFormField label="CPU" help="可输入 qemu -cpu help 未列出的型号后选择「创建」">
                 <USelectMenu
                   v-model="form.cpu"
                   :items="displayedCpuOptions"
                   :loading="cpuLoading"
                   create-item
-                  searchable
                   class="w-full"
+                  @create="onCpuCreate"
                 />
               </UFormField>
               <UFormField label="内存 (MB)">
@@ -179,7 +180,6 @@
                     v-model="openwrtVersion"
                     :items="openwrtVersions"
                     :loading="versionsLoading"
-                    searchable
                     class="flex-1"
                     @update:model-value="onOpenWrtVersionChange"
                   />
@@ -193,7 +193,6 @@
                     :items="openwrtKernels.map((k) => k.name)"
                     :loading="kernelsLoading"
                     :disabled="!openwrtVersion"
-                    searchable
                     class="flex-1"
                     @update:model-value="onKernelSelect"
                   />
@@ -211,7 +210,6 @@
                   :items="localKernelOptions"
                   value-key="value"
                   label-key="label"
-                  searchable
                   class="w-full"
                   @update:model-value="onLocalKernelPathChange"
                 />
@@ -301,6 +299,7 @@ const ARCH_CPU_FALLBACKS: Record<string, string[]> = {
   i386: ["qemu32", "max", "486"],
 };
 
+/** 顶栏筛选用（含「全部」） */
 const archOptions = [
   { label: "全部架构", value: "" },
   { label: "aarch64", value: "aarch64" },
@@ -310,6 +309,9 @@ const archOptions = [
   { label: "x86_64", value: "x86_64" },
   { label: "i386", value: "i386" },
 ];
+
+/** 表单里的架构候选；通过 create-item 新建的架构会追加进来 */
+const archChoices = ref<string[]>(["aarch64", "arm", "mips", "mipsel", "x86_64", "i386"]);
 
 const templates = ref<Template[]>([]);
 const loading = ref(false);
@@ -381,6 +383,28 @@ const canDownloadKernel = computed(
 const localKernelOptions = computed(() =>
   localKernels.value.map((k) => ({ label: k.name, value: k.path }))
 );
+
+/** create-item 只会 emit create，不会写回 v-model，必须自己落库并选中 */
+function onArchCreate(value: string) {
+  const a = value.trim();
+  if (!a) return;
+  if (!archChoices.value.includes(a)) archChoices.value.push(a);
+  onArchChange(a);
+}
+
+function onCpuCreate(value: string) {
+  const c = value.trim();
+  if (!c) return;
+  if (!cpuOptions.value.includes(c)) cpuOptions.value.unshift(c);
+  form.value.cpu = c;
+  syncDisplayedCpuOptions("");
+}
+
+/** 编辑既有模板时，把不在预置列表里的架构补进候选，避免下拉显示为空 */
+function ensureArchChoice(arch?: string) {
+  const a = (arch || "").trim();
+  if (a && !archChoices.value.includes(a)) archChoices.value.push(a);
+}
 
 function onArchChange(arch: string | string[] | undefined) {
   const a = Array.isArray(arch) ? arch[0] : arch || "";
@@ -555,6 +579,7 @@ function openCreate() {
 function openEdit(row: Template) {
   editingId.value = row.id;
   form.value = { ...row, extra_args: row.extra_args || "" };
+  ensureArchChoice(row.arch);
   resetOpenWrtPicker();
   const base = (row.kernel_path || "").split(/[/\\]/).pop() || "";
   if (base) selectedKernelName.value = base;

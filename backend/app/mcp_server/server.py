@@ -45,9 +45,7 @@ def create_mcp() -> FastMCP:
             "注意：启动/停止实例需要宿主机具备 TAP/网桥权限；删除实例不可恢复。"
         ),
         website_url="https://github.com/fsems",
-        host=settings.MCP_HOST,
-        port=settings.MCP_PORT,
-        streamable_http_path="/",  # 由 FastAPI 挂载到 /mcp
+        streamable_http_path="/",  # 由 FastAPI 挂载到 MCP_PATH
         stateless_http=settings.MCP_STATELESS,
         json_response=settings.MCP_JSON_RESPONSE,
         transport_security=security,
@@ -113,10 +111,35 @@ def _register_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         name="instance_action",
-        description="对实例执行生命周期操作：start / stop / reset",
+        description=(
+            "对实例执行生命周期操作：start / stop / reset。wait_boot=true 时等待 SSH 探活；"
+            "响应包含 QEMU 命令、进程、串口和网络诊断。"
+        ),
     )
-    async def instance_action(instance_id: str, action: str, allow_sigkill: bool = True) -> str:
-        return _json(await t.instance_action(instance_id, action, allow_sigkill=allow_sigkill))
+    async def instance_action(
+        instance_id: str,
+        action: str,
+        allow_sigkill: bool = True,
+        wait_boot: bool = False,
+    ) -> str:
+        return _json(
+            await t.instance_action(
+                instance_id,
+                action,
+                allow_sigkill=allow_sigkill,
+                wait_boot=wait_boot,
+            )
+        )
+
+    @mcp.tool(
+        name="instance_diagnostics",
+        description=(
+            "获取实例启动诊断：QEMU 命令/退出码/stderr、串口尾部、内核和磁盘格式、"
+            "TAP/网桥及 SSH 状态。"
+        ),
+    )
+    async def instance_diagnostics(instance_id: str, serial_lines: int = 200) -> str:
+        return _json(await t.instance_diagnostics(instance_id, serial_lines=serial_lines))
 
     @mcp.tool(name="delete_instance", description="彻底删除实例及其工作空间、磁盘与 TAP 资源（不可恢复）")
     async def delete_instance(instance_id: str) -> str:

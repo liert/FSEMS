@@ -38,14 +38,11 @@ class SystemSettingsOut(BaseModel):
     # OpenWrt
     openwrt_download_base: str
 
-    # MCP
+    # MCP（随 API 进程启动）
     mcp_enabled: bool
     mcp_path: str
-    mcp_host: str = "127.0.0.1"
-    mcp_port: int = 8001
     mcp_stateless: bool
     mcp_auth_required: bool
-    mcp_standalone_hint: str = ""
 
     # 认证
     admin_user: str
@@ -58,7 +55,7 @@ class SystemSettingsOut(BaseModel):
 
     # 元信息
     override_file: str = ""
-    restart_hint: str = "部分项（如 MCP 挂载、监听端口）需重启后端进程后完全生效"
+    restart_hint: str = "部分项（如 MCP 启停、挂载路径）需重启后端进程后完全生效"
 
 
 class SystemSettingsUpdate(BaseModel):
@@ -82,8 +79,6 @@ class SystemSettingsUpdate(BaseModel):
 
     mcp_enabled: bool | None = None
     mcp_path: str | None = Field(None, max_length=64)
-    mcp_host: str | None = Field(None, max_length=128)
-    mcp_port: int | None = Field(None, ge=1, le=65535)
     mcp_stateless: bool | None = None
     mcp_token: str | None = Field(None, max_length=256)
 
@@ -111,7 +106,6 @@ def _mask_redis(url: str) -> str:
 def _to_out() -> SystemSettingsOut:
     s = get_settings()
     db_path = s.database_path
-    mcp_hint = f"http://{s.MCP_HOST}:{s.MCP_PORT}{s.MCP_PATH}"
     return SystemSettingsOut(
         workspace=str(s.workspace_path),
         kernels_dir=str(s.kernels_path),
@@ -128,11 +122,8 @@ def _to_out() -> SystemSettingsOut:
         openwrt_download_base=s.OPENWRT_DOWNLOAD_BASE,
         mcp_enabled=s.MCP_ENABLED,
         mcp_path=s.MCP_PATH,
-        mcp_host=s.MCP_HOST,
-        mcp_port=s.MCP_PORT,
         mcp_stateless=s.MCP_STATELESS,
         mcp_auth_required=bool(s.MCP_TOKEN),
-        mcp_standalone_hint=mcp_hint,
         admin_user=s.FSEMS_ADMIN_USER,
         jwt_expire_seconds=s.JWT_EXPIRE_SECONDS,
         api_host=s.API_HOST,
@@ -183,5 +174,5 @@ async def update_system_settings(
 
     return ApiResponse(
         data=_to_out(),
-        message="设置已保存。MCP 挂载/监听端口等需重启后端后完全生效",
+        message="设置已保存。MCP 启停或挂载路径变更需重启后端后完全生效",
     )

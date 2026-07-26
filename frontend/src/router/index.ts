@@ -39,6 +39,11 @@ const router = createRouter({
           component: () => import("@/views/InstanceManage.vue"),
           meta: { title: "实例详情", fullBleed: true },
         },
+        {
+          path: ":pathMatch(.*)*",
+          component: () => import("@/views/NotFound.vue"),
+          meta: { title: "页面不存在" },
+        },
       ],
     },
   ],

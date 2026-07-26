@@ -8,8 +8,8 @@ from app.core.config import Settings
 
 
 def _firmware_path(settings: Settings, subdir: str, filename: str) -> str:
-    root = settings.workspace_path.parent
-    return str((root / subdir / filename).resolve())
+    root = settings.kernels_path if subdir == "kernels" else settings.rootfs_path
+    return str((root / filename).resolve())
 
 
 def build_seed_templates(settings: Settings) -> list[dict]:
@@ -51,9 +51,9 @@ def build_seed_templates(settings: Settings) -> list[dict]:
             "qemu_binary": "qemu-system-mips",
             "machine": "malta",
             "cpu": "24Kc",
-            "kernel_path": k("openwrt-mips-malta-vmlinux.bin"),
-            "drive_path": r("openwrt-mips-malta-rootfs.img.gz"),
-            "kernel_append": "root=/dev/vda rootfstype=ext4 console=ttyS0",
+            "kernel_path": k("openwrt-malta-be-generic-kernel.bin"),
+            "drive_path": r("openwrt-malta-be-generic-ext4-rootfs.img.gz"),
+            "kernel_append": "root=/dev/sda rootfstype=ext4 rootwait console=ttyS0,38400n8",
             "ram_size": 256,
             "guest_ssh_host": "192.168.1.1",
             "guest_ssh_port": 22,
@@ -67,7 +67,7 @@ def build_seed_templates(settings: Settings) -> list[dict]:
             "cpu": "24Kc",
             "kernel_path": k("openwrt-mipsel-malta-vmlinux.bin"),
             "drive_path": r("openwrt-mipsel-malta-rootfs.img.gz"),
-            "kernel_append": "root=/dev/vda rootfstype=ext4 console=ttyS0",
+            "kernel_append": "root=/dev/sda rootfstype=ext4 rootwait console=ttyS0,38400n8",
             "ram_size": 256,
             "guest_ssh_host": "192.168.1.1",
             "guest_ssh_port": 22,

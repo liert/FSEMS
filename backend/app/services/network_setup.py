@@ -44,20 +44,43 @@ async def run_privileged_cmd(args: list[str], *, check: bool = True) -> subproce
         
     return result
 
+async def _link_exists(name: str) -> bool:
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ip", "link", "show", name,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.wait()
+        return proc.returncode == 0
+    except Exception:
+        return False
+
 async def add_tap_to_bridge(tap: str, bridge: str, user: str) -> None:
-    """
-    创建指定用户的 TAP 网卡设备并加入网桥 (需要 root 特权)。
-    """
-    await run_privileged_cmd(["ip", "tuntap", "add", "dev", tap, "mode", "tap", "user", user], check=False)
-    await run_privileged_cmd(["ip", "link", "set", tap, "up"], check=False)
-    await run_privileged_cmd(["brctl", "addif", bridge, tap], check=False)
+    """创建 TAP、加入网桥并验证；任一步失败都清理部分资源并抛错。"""
+    if await _link_exists(tap):
+        await run_privileged_cmd(["ip", "link", "delete", tap], check=True)
+    try:
+        await run_privileged_cmd(
+            ["ip", "tuntap", "add", "dev", tap, "mode", "tap", "user", user],
+            check=True,
+        )
+        await run_privileged_cmd(["ip", "link", "set", "dev", tap, "master", bridge], check=True)
+        await run_privileged_cmd(["ip", "link", "set", "dev", tap, "up"], check=True)
+    except Exception:
+        if await _link_exists(tap):
+            await run_privileged_cmd(["ip", "link", "delete", tap], check=False)
+        raise
+
+    if not await _link_exists(tap):
+        raise RuntimeError(f"TAP 创建后不可见: {tap}")
 
 async def remove_tap(tap: str, bridge: str) -> None:
-    """
-    将网卡移出网桥并删除 TAP 设备 (需要 root 特权)。
-    """
-    await run_privileged_cmd(["brctl", "delif", bridge, tap], check=False)
-    await run_privileged_cmd(["ip", "link", "delete", tap], check=False)
+    """删除 TAP；不存在时保持幂等。"""
+    if not await _link_exists(tap):
+        return
+    await run_privileged_cmd(["ip", "link", "set", "dev", tap, "nomaster"], check=False)
+    await run_privileged_cmd(["ip", "link", "delete", tap], check=True)
 
 async def bridge_exists(bridge: str) -> bool:
     """
@@ -80,20 +103,25 @@ async def ensure_bridge_setup(bridge: str, host_ip: str | None = None) -> None:
     """
     if not await bridge_exists(bridge):
         logger.info(f"网桥 {bridge} 不存在，正在以特权自动创建...")
-        await run_privileged_cmd(["ip", "link", "add", "name", bridge, "type", "bridge"], check=False)
-        await run_privileged_cmd(["ip", "link", "set", bridge, "up"], check=False)
-        
+        await run_privileged_cmd(["ip", "link", "add", "name", bridge, "type", "bridge"], check=True)
+    await run_privileged_cmd(["ip", "link", "set", "dev", bridge, "up"], check=True)
+
+    if not await bridge_exists(bridge):
+        raise RuntimeError(f"网桥创建后不可见: {bridge}")
+
     if host_ip:
         # 检查是否已分配该 IP，没有则添加
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "ip", "addr", "show", "dev", bridge,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+        proc = await asyncio.create_subprocess_exec(
+            "ip", "addr", "show", "dev", bridge,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError(stderr.decode().strip() or f"无法读取网桥地址: {bridge}")
+        if host_ip not in stdout.decode():
+            logger.info(f"为网桥 {bridge} 分配 Host 端口 IP: {host_ip}/24...")
+            await run_privileged_cmd(
+                ["ip", "addr", "add", f"{host_ip}/24", "dev", bridge],
+                check=True,
             )
-            stdout, _ = await proc.communicate()
-            if host_ip not in stdout.decode():
-                logger.info(f"为网桥 {bridge} 分配 Host 端口 IP: {host_ip}/24...")
-                await run_privileged_cmd(["ip", "addr", "add", f"{host_ip}/24", "dev", bridge], check=False)
-        except Exception as e:
-            logger.warning(f"检查或分配网桥 {bridge} 的 IP 失败: {e}")

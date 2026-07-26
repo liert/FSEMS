@@ -110,17 +110,31 @@
 
             <div v-else-if="activeTab === 'mcp'" class="max-w-md space-y-4">
               <h2 class="text-lg font-semibold text-highlighted">MCP（Agent）</h2>
+              <div class="rounded-lg border border-default bg-muted/40 p-3">
+                <div class="flex items-start gap-2">
+                  <span
+                    class="mt-1 size-2 shrink-0 rounded-full"
+                    :class="form.mcp_enabled ? 'bg-success' : 'bg-dimmed'"
+                  />
+                  <div class="min-w-0">
+                    <p class="text-sm font-medium text-highlighted">
+                      {{ form.mcp_enabled ? "随 API 服务启动" : "MCP 已禁用" }}
+                    </p>
+                    <p class="mt-0.5 text-xs text-dimmed">
+                      MCP 复用 API 进程的监听地址和端口，无需启动独立服务。
+                    </p>
+                  </div>
+                </div>
+                <p class="mt-3 break-all rounded-md bg-default px-2.5 py-2 font-mono text-xs text-muted">
+                  {{ mcpApiUrl }}
+                </p>
+              </div>
               <UFormField label="启用 MCP"><USwitch v-model="form.mcp_enabled" /></UFormField>
               <UFormField label="挂载路径"><UInput v-model="form.mcp_path" class="w-full" /></UFormField>
-              <UFormField label="独立进程 Host"><UInput v-model="form.mcp_host" class="w-full" /></UFormField>
-              <UFormField label="独立进程端口">
-                <UInputNumber v-model="form.mcp_port" :min="1" :max="65535" class="w-full" />
-              </UFormField>
               <UFormField label="无状态模式"><USwitch v-model="form.mcp_stateless" /></UFormField>
               <UFormField :label="mcpTokenLabel">
                 <UInput v-model="form.mcp_token" type="password" placeholder="留空则不修改" class="w-full" />
               </UFormField>
-              <p class="font-mono text-xs text-dimmed">同进程地址：{{ mcpApiUrl }}</p>
             </div>
 
             <div v-else class="max-w-3xl space-y-4">
@@ -201,8 +215,6 @@ const form = reactive({
   openwrt_download_base: "",
   mcp_enabled: true,
   mcp_path: "/mcp",
-  mcp_host: "127.0.0.1",
-  mcp_port: 8001,
   mcp_stateless: true,
   mcp_token: "",
   admin_user: "",
@@ -241,8 +253,6 @@ function applySystemToForm(s: SystemSettings) {
   form.openwrt_download_base = s.openwrt_download_base;
   form.mcp_enabled = s.mcp_enabled;
   form.mcp_path = s.mcp_path;
-  form.mcp_host = s.mcp_host || "127.0.0.1";
-  form.mcp_port = s.mcp_port || 8001;
   form.mcp_stateless = s.mcp_stateless;
   form.mcp_token = "";
   form.admin_user = s.admin_user;
@@ -282,8 +292,6 @@ function buildPayload(): SystemSettingsUpdate {
     openwrt_download_base: form.openwrt_download_base.trim(),
     mcp_enabled: form.mcp_enabled,
     mcp_path: form.mcp_path.trim(),
-    mcp_host: form.mcp_host.trim(),
-    mcp_port: form.mcp_port,
     mcp_stateless: form.mcp_stateless,
     admin_user: form.admin_user.trim(),
     jwt_expire_seconds: form.jwt_expire_seconds,

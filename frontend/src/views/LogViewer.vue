@@ -169,6 +169,8 @@ const filteredBackendLines = computed(() => {
 
 const frontendLogs = ref<FrontendLog[]>([]);
 const loadingFrontend = ref(false);
+/** 后端日志请求序号，用于丢弃切换日志源后返回的过期响应 */
+let backendSeq = 0;
 
 function lineClass(line: string) {
   if (line.includes("ERROR") || line.includes("CRITICAL")) return "text-error";
@@ -185,9 +187,13 @@ function levelColor(level: string) {
 }
 
 async function loadBackendLogs() {
+  // 切换日志源时轮询请求可能仍在途，用序号丢弃过期响应，
+  // 否则会在 Celery 选中态下渲染 FastAPI 的日志
+  const seq = ++backendSeq;
   loadingBackend.value = true;
   try {
     const data = await fetchBackendLogs(backendType.value, backendLines.value, 0);
+    if (seq !== backendSeq) return;
     backendTotalLines.value = data.total_lines;
     backendLinesData.value = data.lines;
     if (autoScroll.value) {
@@ -195,9 +201,10 @@ async function loadBackendLogs() {
       if (terminalEl.value) terminalEl.value.scrollTop = terminalEl.value.scrollHeight;
     }
   } catch (e: unknown) {
+    if (seq !== backendSeq) return;
     toastError(e instanceof Error ? e.message : "获取后端日志失败");
   } finally {
-    loadingBackend.value = false;
+    if (seq === backendSeq) loadingBackend.value = false;
   }
 }
 

@@ -35,8 +35,6 @@ EDITABLE_FIELDS: dict[str, str] = {
     "openwrt_download_base": "OPENWRT_DOWNLOAD_BASE",
     "mcp_enabled": "MCP_ENABLED",
     "mcp_path": "MCP_PATH",
-    "mcp_host": "MCP_HOST",
-    "mcp_port": "MCP_PORT",
     "mcp_stateless": "MCP_STATELESS",
     "mcp_token": "MCP_TOKEN",
     "admin_user": "FSEMS_ADMIN_USER",
@@ -96,7 +94,12 @@ def apply_patch(patch: dict[str, Any]) -> dict[str, Any]:
     应用前端提交的 patch（API 字段名），写回覆盖文件，返回完整 Settings 字段覆盖集。
     secret 字段空字符串 = 跳过；明确传 null 可清空（除密码建议用空跳过）。
     """
-    current = load_overrides()
+    editable_model_fields = set(EDITABLE_FIELDS.values())
+    current = {
+        key: value
+        for key, value in load_overrides().items()
+        if key in editable_model_fields
+    }
     for api_key, model_key in EDITABLE_FIELDS.items():
         if api_key not in patch:
             continue
@@ -127,11 +130,6 @@ def apply_patch(patch: dict[str, Any]) -> dict[str, Any]:
         if v < 60 or v > 86400 * 30:
             raise ValueError("jwt_expire_seconds 须在 60–2592000 之间")
         current["JWT_EXPIRE_SECONDS"] = v
-    if "MCP_PORT" in current:
-        v = int(current["MCP_PORT"])
-        if v < 1 or v > 65535:
-            raise ValueError("mcp_port 无效")
-        current["MCP_PORT"] = v
     if "API_PORT" in current:
         v = int(current["API_PORT"])
         if v < 1 or v > 65535:

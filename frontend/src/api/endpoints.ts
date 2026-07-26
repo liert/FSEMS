@@ -23,11 +23,8 @@ export interface SystemSettings {
   openwrt_download_base: string;
   mcp_enabled: boolean;
   mcp_path: string;
-  mcp_host: string;
-  mcp_port: number;
   mcp_stateless: boolean;
   mcp_auth_required: boolean;
-  mcp_standalone_hint: string;
   admin_user: string;
   jwt_expire_seconds: number;
   api_host: string;
@@ -53,8 +50,6 @@ export interface SystemSettingsUpdate {
   openwrt_download_base?: string;
   mcp_enabled?: boolean;
   mcp_path?: string;
-  mcp_host?: string;
-  mcp_port?: number;
   mcp_stateless?: boolean;
   mcp_token?: string;
   admin_user?: string;
@@ -262,6 +257,17 @@ export function consoleWsUrl(id: string): string {
   return `${proto}://${window.location.host}/api/v1/instances/${id}/console?token=${encodeURIComponent(token)}`;
 }
 
+/** 实例自定义 RootFS 解压目录上的宿主机 shell WebSocket */
+export function hostShellWsUrl(instanceId: string): string {
+  const token = localStorage.getItem("fsems_token") || "";
+  const proto = window.location.protocol === "https:" ? "wss" : "ws";
+  const q = new URLSearchParams({
+    token,
+    instance_id: instanceId,
+  });
+  return `${proto}://${window.location.host}/api/v1/fs/host-shell?${q.toString()}`;
+}
+
 export function fetchBackendLogs(type = "fastapi", lines = 100, offset = 0) {
   return unwrap(
     request.get<ApiResponse<BackendLogs>>("/logs/backend", { params: { type, lines, offset } })
@@ -321,9 +327,21 @@ export function uploadHostFile(file: File, path: string, instanceId?: string) {
   );
 }
 
+export type FsOp = "mkdir" | "delete" | "rename";
+
+/** 宿主机文件操作；后端强制目标落在 workspace 内 */
+export function hostFsOp(op: FsOp, path: string, destPath?: string) {
+  return unwrap(
+    request.post<ApiResponse<{ op: string; path: string; dest_path?: string | null }>>(
+      "/fs/host/ops",
+      { op, path, dest_path: destPath ?? null }
+    )
+  );
+}
+
 export function guestFsOp(
   instanceId: string,
-  op: "mkdir" | "delete" | "rename",
+  op: FsOp,
   path: string,
   destPath?: string
 ) {

@@ -80,8 +80,9 @@
               <UInput
                 v-model="username"
                 size="lg"
+                autofocus
                 autocomplete="username"
-                placeholder="admin"
+                placeholder="请输入用户名"
                 icon="i-lucide-user"
                 class="w-full"
                 :disabled="loading"
@@ -141,8 +142,9 @@ import { useUiStore } from "@/stores/ui";
 const auth = useAuthStore();
 const ui = useUiStore();
 const router = useRouter();
-const username = ref("admin");
-const password = ref("admin");
+// 不预填凭据：生产构建下等同于把默认管理员口令公开在登录页
+const username = ref("");
+const password = ref("");
 const loading = ref(false);
 const errorMsg = ref("");
 

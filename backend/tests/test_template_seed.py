@@ -65,3 +65,20 @@ def test_build_seed_templates_includes_multi_arch(seed_templates):
     archs = {t["arch"] for t in seed_templates}
     assert archs >= {"aarch64", "mips", "mipsel", "x86_64"}
     assert len(seed_templates) >= 5
+
+
+def test_mips_seed_uses_configured_firmware_dirs_and_malta_devices():
+    settings = Settings(
+        FSEMS_WORKSPACE="/tmp/fsems-test/workspace",
+        FSEMS_KERNELS_DIR="/opt/fsems/kernels",
+        FSEMS_ROOTFS_DIR="/opt/fsems/rootfs",
+        DATABASE_URL="sqlite+aiosqlite:///:memory:",
+    )
+    templates = build_seed_templates(settings)
+    mips = next(t for t in templates if t["name"] == "OpenWrt MIPS (malta)")
+
+    assert mips["kernel_path"] == "/opt/fsems/kernels/openwrt-malta-be-generic-kernel.bin"
+    assert mips["drive_path"] == "/opt/fsems/rootfs/openwrt-malta-be-generic-ext4-rootfs.img.gz"
+    assert mips["kernel_append"] == (
+        "root=/dev/sda rootfstype=ext4 rootwait console=ttyS0,38400n8"
+    )

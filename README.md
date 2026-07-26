@@ -65,13 +65,10 @@ sudo ./scripts/dev_start.sh
 
 后端默认在 **`/mcp`** 暴露标准 MCP Streamable HTTP 服务，供 Cursor / Claude 等 Agent 管理实例与模板：
 
-```bash
-# 与 API 同进程（默认 MCP_ENABLED=true）
-# 端点: http://127.0.0.1:8000/mcp
+MCP 随 API 进程自动启动，无需单独运行服务：
 
-# 或独立进程
-cd backend && .venv/bin/python -m app.mcp_server
-# 端点: http://127.0.0.1:8001/mcp
+```text
+http://127.0.0.1:8000/mcp
 ```
 
 工具包括：`list_instances`、`create_instance`、`instance_action`、`delete_instance`、`list_templates` 等。详见 [`docs/mcp.md`](docs/mcp.md)。
@@ -148,6 +145,6 @@ sudo ./scripts/install_production.sh
 sudo systemctl enable --now fsems-api fsems-celery
 ```
 
-使用 Nginx 反代 `127.0.0.1:8000` 的 `/api/v1`，并将 `frontend/dist` 作为静态站点；WebSocket 需配置 `/api/v1/instances/` 的 upgrade 头。
+使用 Nginx 反代 `127.0.0.1:8000` 的 `/api/v1` 和 `/mcp`，并将 `frontend/dist` 作为静态站点；WebSocket 需配置 `/api/v1/instances/` 的 upgrade 头，`/mcp` 需关闭代理缓冲以支持 Streamable HTTP/SSE。
 
 默认登录：`admin` / `admin`（见 `.env`，生产环境务必修改）。

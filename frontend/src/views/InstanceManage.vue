@@ -47,33 +47,19 @@
             @status-changed="instanceStatus = $event"
           />
         </div>
-        <!-- v-if：避免 display:none 时 xterm fit 得到 0 高度导致无法滚动 -->
-        <div v-if="activeTab === 'console'" class="relative min-h-0 flex-1 overflow-hidden">
-          <div
-            v-if="instanceStatus === 'STOPPED'"
-            class="flex h-full items-center justify-center p-6"
-          >
-            <EmptyState
-              title="控制台不可用"
-              description="虚拟机已停止，请先启动后再打开串口控制台。"
-              icon="i-lucide-monitor-off"
-              size="lg"
-            >
-              <template #action>
-                <UButton
-                  label="立即启动虚拟机"
-                  icon="i-lucide-play"
-                  size="lg"
-                  :loading="consoleStartBusy"
-                  @click="startFromConsoleEmpty"
-                />
-              </template>
-            </EmptyState>
-          </div>
+        <!--
+          控制台首次打开后保持挂载（v-show），离开标签页不再销毁终端：
+          否则 shell 会话、滚动历史和当前工作目录都会丢失。
+        -->
+        <div
+          v-if="consoleMounted"
+          v-show="activeTab === 'console'"
+          class="relative min-h-0 flex-1 overflow-hidden"
+        >
           <TerminalConsole
-            v-else
             ref="consoleRef"
             :instance-id="instanceId"
+            :guest-available="consoleGuestAvailable"
             class="absolute inset-0 h-full min-h-0"
           />
         </div>
@@ -94,7 +80,6 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { fetchInstanceDetail, instanceAction } from "@/api/endpoints";
-import EmptyState from "@/components/EmptyState.vue";
 import InstanceActionBar from "@/components/InstanceActionBar.vue";
 import StatusBadge from "@/components/StatusBadge.vue";
 import TaskCenter from "@/components/TaskCenter.vue";
@@ -114,11 +99,18 @@ const instanceStatus = ref("LOADING");
 const activeTab = ref("overview");
 const overviewRefreshKey = ref(0);
 const consoleRef = ref<InstanceType<typeof TerminalConsole> | null>(null);
-const consoleStartBusy = ref(false);
-let pollTimer: ReturnType<typeof setInterval> | null = null;
+/** 懒挂载：首次进入控制台标签页才创建终端，避免未使用时也占一条串口连接 */
+const consoleMounted = ref(false);
+const consoleGuestAvailable = computed(
+  () =>
+    instanceStatus.value === "RUNNING" ||
+    instanceStatus.value === "STARTING" ||
+    instanceStatus.value === "STOPPING"
+);
 
 watch(activeTab, async (tab) => {
   if (tab !== "console") return;
+  consoleMounted.value = true;
   await nextTick();
   consoleRef.value?.refit();
   // 布局稳定后再 fit 一次
@@ -126,10 +118,24 @@ watch(activeTab, async (tab) => {
 });
 
 const tabItems = [
-  { label: "基本信息", value: "overview" },
-  { label: "控制台", value: "console" },
-  { label: "文件管理器", value: "files" },
+  { label: "基本信息", value: "overview", icon: "i-lucide-info" },
+  { label: "控制台", value: "console", icon: "i-lucide-square-terminal" },
+  { label: "文件管理器", value: "files", icon: "i-lucide-folder-tree" },
 ];
+
+const statusActionText: Record<string, string> = {
+  RUNNING: "已启动",
+  STOPPED: "已停止",
+  ERROR: "进入错误状态",
+};
+
+// 状态由 InstanceOverview 的轮询统一上报，这里只负责在过渡态结束时提示一次
+watch(instanceStatus, (next, prev) => {
+  const wasTransitional = prev === "STARTING" || prev === "STOPPING";
+  const isTransitional = next === "STARTING" || next === "STOPPING";
+  if (!wasTransitional || isTransitional || next === "LOADING") return;
+  toastSuccess(`虚拟机${statusActionText[next] ?? `状态：${next}`}`);
+});
 
 watch(
   instanceName,
@@ -144,11 +150,8 @@ async function loadInstanceDetails() {
     const data = await fetchInstanceDetail(instanceId.value);
     instanceName.value = data.name;
     instanceStatus.value = data.status;
-    if (data.status === "STARTING" || data.status === "STOPPING") startPolling();
-    else stopPolling();
   } catch (error) {
-    console.error("加载实例详情发生错误:", error);
-    stopPolling();
+    toastError(error instanceof Error ? error.message : "加载实例详情失败");
   }
 }
 
@@ -158,32 +161,11 @@ function onStatusOptimistic(status: string) {
 
 function onStatusChanged(status: string) {
   instanceStatus.value = status;
-  startPolling();
+  overviewRefreshKey.value += 1;
 }
 
 function onActionDone() {
   overviewRefreshKey.value += 1;
-  startPolling();
-}
-
-/** 控制台空态启动（带按钮 loading） */
-async function startFromConsoleEmpty() {
-  if (consoleStartBusy.value) return;
-  consoleStartBusy.value = true;
-  instanceStatus.value = "STARTING";
-  try {
-    toastInfo("正在启动…");
-    const updated = await instanceAction(instanceId.value, "start");
-    instanceStatus.value = updated.status;
-    overviewRefreshKey.value += 1;
-    toastSuccess("已下发启动指令");
-    startPolling();
-  } catch (error: unknown) {
-    toastError(error instanceof Error ? error.message : "启动失败");
-    await loadInstanceDetails();
-  } finally {
-    consoleStartBusy.value = false;
-  }
 }
 
 async function doAction(action: "start" | "stop" | "reset") {
@@ -198,34 +180,9 @@ async function doAction(action: "start" | "stop" | "reset") {
     instanceStatus.value = updated.status;
     overviewRefreshKey.value += 1;
     toastSuccess(`已下发${actionMap[action]}指令`);
-    startPolling();
   } catch (error: unknown) {
     toastError(error instanceof Error ? error.message : "虚拟机操作执行失败");
     await loadInstanceDetails();
-  }
-}
-
-function startPolling() {
-  if (pollTimer) return;
-  pollTimer = setInterval(async () => {
-    try {
-      const data = await fetchInstanceDetail(instanceId.value);
-      instanceStatus.value = data.status;
-      if (data.status !== "STARTING" && data.status !== "STOPPING") {
-        stopPolling();
-        overviewRefreshKey.value += 1;
-        toastSuccess(`虚拟机状态：${data.status}`);
-      }
-    } catch {
-      stopPolling();
-    }
-  }, 2000);
-}
-
-function stopPolling() {
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
   }
 }
 
@@ -238,8 +195,5 @@ function goBack() {
 }
 
 watch(instanceId, () => void loadInstanceDetails(), { immediate: true });
-onBeforeUnmount(() => {
-  stopPolling();
-  ui.setPageBreadcrumbLabel(null);
-});
+onBeforeUnmount(() => ui.setPageBreadcrumbLabel(null));
 </script>

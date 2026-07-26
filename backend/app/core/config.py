@@ -26,10 +26,8 @@ class Settings(BaseSettings):
     LOGS_DIR: str = ""
     OPENWRT_DOWNLOAD_BASE: str = "https://downloads.openwrt.org"
 
-    # MCP Streamable HTTP（Agent 管理接口）
+    # MCP Streamable HTTP（随 API 进程启动并挂载）
     MCP_ENABLED: bool = True
-    MCP_HOST: str = "127.0.0.1"
-    MCP_PORT: int = 8001
     MCP_PATH: str = "/mcp"
     MCP_STATELESS: bool = True
     MCP_JSON_RESPONSE: bool = False

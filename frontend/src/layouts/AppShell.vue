@@ -1,5 +1,5 @@
 <template>
-  <UDashboardGroup storage="localStorage" storage-key="fsems-dashboard" class="min-h-dvh">
+  <UDashboardGroup storage="local" storage-key="fsems-dashboard" class="min-h-dvh">
     <UDashboardSidebar
       collapsible
       resizable

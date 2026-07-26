@@ -2,15 +2,26 @@
 import logging
 import shutil
 
-from fastapi import APIRouter, Depends, Query, HTTPException, status, UploadFile, File, Form
+from fastapi import (
+    APIRouter,
+    Depends,
+    Query,
+    HTTPException,
+    status,
+    UploadFile,
+    File,
+    Form,
+    WebSocket,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 import redis.asyncio as aioredis
 import hashlib
 import json
 import uuid
 from pathlib import Path
+from starlette.websockets import WebSocketDisconnect
 
-from app.api.deps import get_current_user, get_db
+from app.api.deps import get_current_user, get_db, verify_ws_token
 from app.schemas.common import ApiResponse
 from app.schemas.fs import (
     FileEntry,
@@ -21,12 +32,17 @@ from app.schemas.fs import (
     HostUploadResult,
     GuestFsOpRequest,
     GuestFsOpResult,
+    HostFsOpRequest,
+    HostFsOpResult,
 )
 from app.services.host_fs import (
     list_directory,
     resolve_instance_host_root,
     resolve_workspace_path,
     resolve_host_directory,
+    host_mkdir,
+    host_remove,
+    host_rename,
 )
 from app.services.instance_service import get_instance
 from app.services.guest_fs_offline import list_guest_offline_directory
@@ -40,6 +56,7 @@ from app.services.ssh_service import (
 )
 from app.core.config import get_settings
 from app.models.task import Task
+from app.services.host_shell import run_host_shell_session
 from app.tasks.file_transfer import run_file_transfer
 
 router = APIRouter(prefix="/fs", tags=["fs"])
@@ -84,6 +101,43 @@ async def list_host_dir(
             host_root_path=host_root_path,
         ),
         message="Host directory listed",
+    )
+
+
+@router.post("/host/ops", response_model=ApiResponse[HostFsOpResult])
+async def host_fs_op(
+    req: HostFsOpRequest,
+    _user: str = Depends(get_current_user),
+) -> ApiResponse[HostFsOpResult]:
+    if req.op not in ("mkdir", "delete", "rename"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error_code": "INVALID_HOST_OP", "message": "op must be mkdir, delete, or rename"},
+        )
+
+    if req.op == "mkdir":
+        target = host_mkdir(req.path)
+        return ApiResponse(
+            data=HostFsOpResult(op=req.op, path=target.as_posix()),
+            message="Host directory created",
+        )
+
+    if req.op == "delete":
+        target = host_remove(req.path)
+        return ApiResponse(
+            data=HostFsOpResult(op=req.op, path=target.as_posix()),
+            message="Host path deleted",
+        )
+
+    if not req.dest_path:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error_code": "INVALID_HOST_OP", "message": "dest_path required for rename"},
+        )
+    dest = host_rename(req.path, req.dest_path)
+    return ApiResponse(
+        data=HostFsOpResult(op=req.op, path=req.path, dest_path=dest.as_posix()),
+        message="Host path renamed",
     )
 
 
@@ -383,6 +437,86 @@ async def transfer_file(
         data=TransferResponse(task_id=task_id),
         message="Transfer task queued",
     )
+
+
+def _resolve_instance_rootfs_shell_cwd(instance_id: str) -> Path:
+    """
+    宿主机 shell 工作目录：优先实例自定义 RootFS 解压目录 workspace/<id>/rootfs，
+    不存在则回退到实例 workspace；再不行用全局 workspace。
+    """
+    settings = get_settings()
+    ws = settings.workspace_path.resolve()
+    inst_ws = (ws / instance_id).resolve()
+    rootfs_dir = (inst_ws / "rootfs").resolve()
+    try:
+        # 防止 instance_id 含 .. 逃出 workspace
+        inst_ws.relative_to(ws)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid instance_id",
+        ) from exc
+
+    if rootfs_dir.is_dir():
+        return rootfs_dir
+    if inst_ws.is_dir():
+        return inst_ws
+    return ws
+
+
+@router.websocket("/host-shell")
+async def host_shell_ws(
+    websocket: WebSocket,
+    token: str | None = None,
+    instance_id: str | None = None,
+) -> None:
+    """
+    宿主机交互式 shell WebSocket。
+    工作目录为实例「自定义 RootFS」解压目录（workspace/<id>/rootfs），
+    而非宿主机 /。协议与访客串口一致：二进制输入/输出，JSON resize。
+    """
+    await websocket.accept()
+    try:
+        await verify_ws_token(token)
+    except HTTPException:
+        await websocket.close(code=4401)
+        return
+
+    if not instance_id or not instance_id.strip():
+        try:
+            await websocket.send_bytes(
+                "\r\n\x1b[31m[FSEMS] 缺少 instance_id\x1b[0m\r\n".encode()
+            )
+            await websocket.close(code=4400)
+        except Exception:
+            pass
+        return
+
+    try:
+        workdir = str(_resolve_instance_rootfs_shell_cwd(instance_id.strip()))
+    except HTTPException:
+        try:
+            await websocket.close(code=4400)
+        except Exception:
+            pass
+        return
+
+    try:
+        await websocket.send_bytes(
+            f"\r\n\x1b[90m[FSEMS] 自定义 RootFS 目录 shell · cwd={workdir}\x1b[0m\r\n".encode()
+        )
+        await run_host_shell_session(websocket, cwd=workdir, cols=80, rows=24)
+    except WebSocketDisconnect:
+        pass
+    except Exception as exc:
+        logger.exception("host shell session error: %s", exc)
+        try:
+            await websocket.send_bytes(
+                f"\r\n\x1b[31m[FSEMS] 宿主机 shell 异常: {exc}\x1b[0m\r\n".encode()
+            )
+            await websocket.close(code=1011)
+        except Exception:
+            pass
 
 
 @router.post("/host/upload", response_model=ApiResponse[HostUploadResult])

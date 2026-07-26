@@ -18,9 +18,15 @@ def _err(exc: Exception) -> dict[str, Any]:
     if isinstance(exc, HTTPException):
         detail = exc.detail
         if isinstance(detail, dict):
-            return {"ok": False, "error": detail.get("message") or detail.get("error_code") or str(detail)}
-        return {"ok": False, "error": str(detail)}
-    return {"ok": False, "error": str(exc)}
+            return {
+                "ok": False,
+                "http_status": exc.status_code,
+                "error_code": detail.get("error_code"),
+                "error": detail.get("message") or detail.get("error_code") or str(detail),
+                "details": detail,
+            }
+        return {"ok": False, "http_status": exc.status_code, "error": str(detail)}
+    return {"ok": False, "error_code": type(exc).__name__, "error": str(exc)}
 
 
 async def health() -> dict[str, Any]:
@@ -60,6 +66,13 @@ async def list_templates(arch: str | None = None) -> dict[str, Any]:
                         "machine": t.machine,
                         "cpu": t.cpu,
                         "ram_size": t.ram_size,
+                        "kernel_path": t.kernel_path,
+                        "drive_path": t.drive_path,
+                        "kernel_append": t.kernel_append,
+                        "effective_kernel_append": instance_service.qemu_manager.effective_kernel_append(t),
+                        "block_device": instance_service.qemu_manager.block_device_arg(t.machine) or "ide",
+                        "network_device": instance_service.qemu_manager.net_device_arg(t.machine),
+                        "extra_args": t.extra_args,
                         "guest_ssh_host": t.guest_ssh_host,
                         "guest_ssh_port": t.guest_ssh_port,
                     }
@@ -122,7 +135,26 @@ async def create_instance(
         return _err(exc)
 
 
-async def instance_action(instance_id: str, action: str, allow_sigkill: bool = True) -> dict[str, Any]:
+async def instance_diagnostics(instance_id: str, serial_lines: int = 200) -> dict[str, Any]:
+    try:
+        async with SessionLocal() as session:
+            inst = await instance_service.get_instance(session, instance_id)
+            diagnostics = await instance_service.qemu_manager.instance_diagnostics(
+                inst,
+                inst.template,
+                serial_lines=max(0, min(int(serial_lines), 2000)),
+            )
+            return {"ok": True, "diagnostics": diagnostics}
+    except Exception as exc:
+        return _err(exc)
+
+
+async def instance_action(
+    instance_id: str,
+    action: str,
+    allow_sigkill: bool = True,
+    wait_boot: bool = False,
+) -> dict[str, Any]:
     action = (action or "").strip().lower()
     if action not in {"start", "stop", "reset"}:
         return {"ok": False, "error": "action 必须是 start / stop / reset"}
@@ -130,13 +162,21 @@ async def instance_action(instance_id: str, action: str, allow_sigkill: bool = T
         async with SessionLocal() as session:
             inst = await instance_service.get_instance(session, instance_id)
             updated = await instance_service.perform_action(
-                session, inst, action, allow_sigkill=allow_sigkill
+                session,
+                inst,
+                action,
+                allow_sigkill=allow_sigkill,
+                wait_boot=wait_boot,
+            )
+            diagnostics = await instance_service.qemu_manager.instance_diagnostics(
+                updated, updated.template, serial_lines=80
             )
             return {
                 "ok": True,
                 "id": updated.id,
                 "status": updated.status,
                 "action": action,
+                "diagnostics": diagnostics,
             }
     except Exception as exc:
         return _err(exc)

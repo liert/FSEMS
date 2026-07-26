@@ -1,6 +1,12 @@
 <template>
   <div class="space-y-4 p-1">
     <LoadingState v-if="initialLoading" description="加载实例详情…" />
+    <ErrorState
+      v-else-if="loadError && !detail"
+      title="无法加载实例详情"
+      :description="loadError"
+      :retry="() => void loadDetail()"
+    />
     <template v-else>
       <div class="grid gap-4 lg:grid-cols-2">
         <motion.div :initial="{ opacity: 0, y: 10 }" :animate="{ opacity: 1, y: 0 }" :transition="staggerDelay(0)">
@@ -310,7 +316,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { motion } from "motion-v";
 import {
   createSnapshot,
@@ -323,6 +329,7 @@ import {
 } from "@/api/endpoints";
 import type { InstanceDetail, Snapshot } from "@/api/types";
 import EmptyState from "@/components/EmptyState.vue";
+import ErrorState from "@/components/ErrorState.vue";
 import LoadingState from "@/components/LoadingState.vue";
 import StatusBadge from "@/components/StatusBadge.vue";
 import { useTaskStore } from "@/stores/tasks";
@@ -334,6 +341,7 @@ const emit = defineEmits<{ (e: "updated"): void; (e: "status-changed", s: string
 
 const initialLoading = ref(true);
 const detail = ref<InstanceDetail | null>(null);
+const loadError = ref("");
 const customRootfsInput = ref("");
 const customRootfsBusy = ref(false);
 const rootfsEditing = ref(false);
@@ -374,6 +382,11 @@ const snapName = ref("");
 const snapBusy = ref(false);
 const taskStore = useTaskStore();
 let pollTimer: ReturnType<typeof setInterval> | null = null;
+/** 请求序号：切换实例或轮询与手动刷新重叠时丢弃过期响应 */
+let detailSeq = 0;
+/** 连续轮询失败计数，超过阈值放弃轮询，避免持续刷错误日志 */
+let pollErrors = 0;
+const MAX_POLL_ERRORS = 3;
 
 const sshEndpoint = computed(() => {
   if (!detail.value?.guest_ssh_host) return "—";
@@ -427,25 +440,47 @@ function formatTime(value?: string) {
 }
 
 async function loadDetail(silent = false) {
+  const seq = ++detailSeq;
   if (!silent && !detail.value) initialLoading.value = true;
   try {
-    detail.value = await fetchInstanceDetail(props.instanceId);
+    const data = await fetchInstanceDetail(props.instanceId);
+    if (seq !== detailSeq) return; // 已有更新的请求在途，丢弃过期响应
+    pollErrors = 0;
+    loadError.value = "";
+    detail.value = data;
     if (!customRootfsBusy.value && !rootfsEditing.value) {
-      customRootfsInput.value = detail.value.custom_rootfs_source_path || "";
+      customRootfsInput.value = data.custom_rootfs_source_path || "";
     }
-    await loadSnapshots();
-    if (detail.value.status === "STARTING" || detail.value.status === "STOPPING") startPolling();
+    // 本组件常驻挂载，是实例状态的唯一轮询源，逐次上报给 InstanceManage
+    emit("status-changed", data.status);
+    await loadSnapshots(seq);
+    if (seq !== detailSeq) return;
+    if (data.status === "STARTING" || data.status === "STOPPING") startPolling();
     else stopPolling();
+  } catch (e: unknown) {
+    if (seq !== detailSeq) return;
+    const msg = e instanceof Error ? e.message : "加载实例详情失败";
+    if (!detail.value) {
+      // 首屏失败：给出错误态与重试入口，而不是一屏空的「—」
+      loadError.value = msg;
+      stopPolling();
+    } else if (++pollErrors >= MAX_POLL_ERRORS) {
+      // 实例可能已被删除或后端下线，停止轮询避免无限刷错误
+      stopPolling();
+      toastError(msg);
+    }
   } finally {
-    initialLoading.value = false;
+    if (seq === detailSeq) initialLoading.value = false;
   }
 }
 
-async function loadSnapshots() {
+async function loadSnapshots(seq?: number) {
   try {
     const data = await fetchSnapshots(props.instanceId);
+    if (seq != null && seq !== detailSeq) return;
     snapshots.value = data.list;
   } catch {
+    if (seq != null && seq !== detailSeq) return;
     snapshots.value = [];
   }
 }
@@ -715,6 +750,7 @@ async function deleteSnap(row: Snapshot) {
 
 function startPolling() {
   if (pollTimer) return;
+  pollErrors = 0;
   pollTimer = setInterval(() => void loadDetail(true), 3000);
 }
 function stopPolling() {
@@ -722,11 +758,12 @@ function stopPolling() {
     clearInterval(pollTimer);
     pollTimer = null;
   }
+  pollErrors = 0;
 }
 
 watch(() => props.refreshKey, () => void loadDetail(true));
+// immediate 已覆盖首次加载，不要再叠一个 onMounted，否则挂载时会并发两组请求
 watch(() => props.instanceId, () => void loadDetail(), { immediate: true });
-onMounted(() => void loadDetail());
 onBeforeUnmount(() => {
   stopPolling();
   if (rootfsBlurTimer) {
