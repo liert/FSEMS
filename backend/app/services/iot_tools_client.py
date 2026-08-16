@@ -154,9 +154,10 @@ async def _run_iot_tools(
             chunks.append(text)
             stripped = text.rstrip()
             if stripped:
-                logger.info("iot-tools | %s", stripped)
                 if on_line:
                     on_line(stripped)
+                else:
+                    logger.info("iot-tools | %s", stripped)
 
     try:
         await asyncio.wait_for(_read_stdout(), timeout=timeout_sec)
@@ -185,6 +186,7 @@ async def scp_host_to_guest(
     dry_run: bool = False,
     timeout_sec: float = 600,
     progress: ProgressCallback | None = None,
+    on_line: Callable[[str], None] | None = None,
 ) -> str:
     settings = get_settings()
     ssh_user = user or settings.FSEMS_GUEST_SSH_USER or "root"
@@ -201,7 +203,13 @@ async def scp_host_to_guest(
         await _maybe_await(progress(15))
 
     env = build_iot_env(port=port, password=password)
-    out = await _run_iot_tools(args, cwd=str(root), env=env, timeout_sec=timeout_sec)
+    out = await _run_iot_tools(
+        args,
+        cwd=str(root),
+        env=env,
+        timeout_sec=timeout_sec,
+        on_line=on_line,
+    )
 
     if progress:
         await _maybe_await(progress(95))

@@ -42,3 +42,43 @@ def setup_logging(logs_dir: str) -> None:
                 
         # 打印初始化完成日志（中文日志，日志等级英文大写）
         root_logger.info("系统日志服务初始化成功，日志输出路径: %s", log_file.as_posix())
+
+
+def setup_celery_logging(logs_dir: str) -> None:
+    """为 Celery worker 挂载 celery.log，记录 iot-tools 逐文件传输明细。
+
+    Celery 默认把日志写到 stderr，而 FSEMS 自动拉起 worker 时 stderr 指向
+    DEVNULL，导致「系统日志 → Celery」页一直是空的。这里给根 logger 增加一个
+    独立的 RotatingFileHandler，app.services.iot_tools_client 与
+    app.tasks.file_transfer 的 INFO 日志都会随之落到 celery.log。
+    """
+    log_file = Path(logs_dir) / "celery.log"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+
+    resolved = log_file.resolve()
+    has_file_handler = any(
+        isinstance(handler, RotatingFileHandler)
+        and Path(handler.baseFilename).resolve() == resolved
+        for handler in root_logger.handlers
+    )
+    if has_file_handler:
+        return
+
+    file_handler = RotatingFileHandler(
+        log_file,
+        maxBytes=10 * 1024 * 1024,
+        backupCount=5,
+        encoding="utf-8",
+    )
+    file_handler.setFormatter(
+        logging.Formatter(
+            "[%(asctime)s] %(levelname)s: %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    )
+    file_handler.setLevel(logging.INFO)
+    root_logger.addHandler(file_handler)
+    root_logger.info("Celery 日志文件已初始化: %s", log_file.as_posix())

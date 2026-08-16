@@ -21,6 +21,7 @@ from app.core.database import SessionLocal
 from app.models.instance import Instance
 from app.models.task import Task
 from app.services import iot_tools_client
+from app.services.host_fs import resolve_instance_host_root
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,24 @@ def _progress_from_bytes(bytes_transferred: int, total_bytes: int | None) -> int
     return min(92, 5 + int(bytes_transferred / (512 * 1024)))
 
 
+def _dependency_search_root(instance_id: str, source_path: str) -> Path:
+    """Host→guest 推送 ELF 时的 iot-tools 依赖搜索根。
+
+    iot-tools 会从 search_root 向下查找 NEEDED 库，并按相对路径映射到 guest
+    （rootfs/usr/lib/... → /usr/lib/...）。双栏文件管理器中宿主机面板的根就是
+    实例自定义 RootFS 解压目录，因此源文件位于实例根内时必须以实例根作为
+    search_root；若仍用文件所在目录，依赖只会扫描 usr/bin 等单层目录，最终
+    出现“只传了 dbus-daemon、没有传 libdbus/libexpat 等依赖”的问题。
+    """
+    source = Path(source_path).resolve()
+    instance_root = resolve_instance_host_root(instance_id)
+    try:
+        source.relative_to(instance_root)
+    except ValueError:
+        return source.parent
+    return instance_root
+
+
 async def _transfer_via_iot_tools(
     direction: str,
     src: str,
@@ -67,6 +86,7 @@ async def _transfer_via_iot_tools(
     host: str,
     port: int,
     task_id: str,
+    search_root: Path | None = None,
 ) -> None:
     async def bump(pct: int) -> None:
         await _set_task_progress(task_id, pct)
@@ -74,14 +94,20 @@ async def _transfer_via_iot_tools(
     await bump(10)
 
     if direction == "host_to_guest":
-        search_root = Path(src).parent
+        search_root = search_root or Path(src).parent
         logger.info(
-            "iot-tools push: %s -> %s:%s (search_root=%s)",
+            "[task=%s] iot-tools push: %s -> %s:%s (search_root=%s)",
+            task_id,
             src,
             host,
             dest,
             search_root,
         )
+
+        def record_iot_line(line: str) -> None:
+            # iot-tools 的每一行都对应一个实际复制项（主文件或 ELF 依赖）。
+            logger.info("[task=%s] iot-tools | %s", task_id, line)
+
         await iot_tools_client.scp_host_to_guest(
             src,
             host,
@@ -89,7 +115,9 @@ async def _transfer_via_iot_tools(
             port=port,
             search_root=search_root,
             progress=bump,
+            on_line=record_iot_line,
         )
+        logger.info("[task=%s] iot-tools push 完成", task_id)
     elif direction == "guest_to_host":
         logger.info("iot-tools pull: %s:%s -> %s", host, src, dest)
         await iot_tools_client.scp_guest_to_host(
@@ -136,8 +164,18 @@ async def async_file_transfer(task_id: str, direction: str, src: str, dest: str)
             host = instance.guest_ssh_host or template.guest_ssh_host
             port = int(template.guest_ssh_port or 22)
 
+            search_root = None
+            if direction == "host_to_guest":
+                search_root = _dependency_search_root(instance.id, src)
+
             await _transfer_via_iot_tools(
-                direction, src, dest, host=host, port=port, task_id=task_id
+                direction,
+                src,
+                dest,
+                host=host,
+                port=port,
+                task_id=task_id,
+                search_root=search_root,
             )
 
             if direction == "host_to_guest":
