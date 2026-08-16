@@ -213,6 +213,16 @@ export function expandInstanceDrive(
   );
 }
 
+/** 创建后修改实例 QEMU CPU；null 恢复模板默认，下次启动生效 */
+export function updateInstanceCpu(instanceId: string, cpu: string | null) {
+  return unwrap(
+    request.put<ApiResponse<InstanceDetail>>(
+      `/instances/${instanceId}/cpu`,
+      { cpu: cpu || null }
+    )
+  );
+}
+
 /** 创建后修改/重新部署自定义 RootFS（解压可能较久） */
 export function updateCustomRootfs(instanceId: string, rootfsPath: string | null) {
   return unwrap(

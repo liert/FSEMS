@@ -42,6 +42,7 @@ def instance_to_out(instance: Instance) -> dict:
         "bridge_name": instance.bridge_name,
         "filesystem_type": instance.filesystem_type or "ext4",
         "use_custom_rootfs": bool(instance.use_custom_rootfs),
+        "cpu": instance.cpu,
         "pid": instance.pid,
         "created_at": instance.created_at,
     }
@@ -61,6 +62,12 @@ def instance_detail_to_out(instance: Instance) -> dict:
         **instance_to_out(instance),
         "template_name": template.name if template else "",
         "template_arch": template.arch if template else "",
+        "template_cpu": template.cpu if template else None,
+        "effective_cpu": (
+            qemu_manager.effective_cpu(template, instance.cpu)
+            if template
+            else (instance.cpu or None)
+        ),
         "ram_size_mb": template.ram_size if template else 0,
         "ram_used_mb": get_process_rss_mb(instance.pid),
         "drive_path": str(drive_path) if drive_path.exists() else instance.drive_path,
@@ -332,6 +339,20 @@ def deploy_custom_rootfs_dir(inst_workspace: Path, rootfs_path: str) -> Path:
         logger.warning("自动修复自定义 RootFS 中的绝对路径符号链接失败: %s", e)
 
     return inst_rootfs_dir
+
+
+async def update_cpu(
+    session: AsyncSession,
+    instance: Instance,
+    cpu: str | None,
+) -> Instance:
+    """创建后修改实例 QEMU CPU；空值恢复模板默认，下次启动生效。"""
+    value = (cpu or "").strip()
+    instance.cpu = value or None
+    instance.updated_at = datetime.utcnow()
+    await session.commit()
+    await session.refresh(instance, attribute_names=["template"])
+    return instance
 
 
 async def update_custom_rootfs(

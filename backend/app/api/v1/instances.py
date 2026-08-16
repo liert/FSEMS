@@ -12,6 +12,7 @@ from app.schemas.instance import (
     InstanceActionResult,
     InstanceCreate,
     InstanceCreated,
+    InstanceCpuUpdate,
     InstanceDetailOut,
     InstanceListOut,
     InstanceOut,
@@ -123,6 +124,22 @@ async def update_custom_rootfs(
     return ApiResponse(
         data=InstanceDetailOut(**instance_detail_to_out(updated)),
         message="Custom RootFS updated",
+    )
+
+
+@router.put("/{instance_id}/cpu", response_model=ApiResponse[InstanceDetailOut])
+async def update_instance_cpu(
+    instance_id: str,
+    body: InstanceCpuUpdate,
+    _user: str = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[InstanceDetailOut]:
+    """创建后修改实例 QEMU CPU；留空恢复模板默认值。"""
+    instance = await get_instance(session, instance_id)
+    updated = await instance_service.update_cpu(session, instance, body.cpu)
+    return ApiResponse(
+        data=InstanceDetailOut(**instance_detail_to_out(updated)),
+        message="CPU updated; effective on next start",
     )
 
 

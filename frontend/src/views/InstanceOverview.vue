@@ -65,6 +65,64 @@
           <UCard class="h-full ring-1 ring-default/40 transition-shadow hover:shadow-md">
             <template #header>
               <div class="flex items-center gap-2">
+                <UIcon name="i-lucide-cpu" class="size-4 text-primary" />
+                <span class="font-semibold">QEMU CPU</span>
+              </div>
+            </template>
+            <dl class="space-y-2.5">
+              <div class="meta-row">
+                <dt class="meta-label">模板默认</dt>
+                <dd class="meta-value meta-mono">{{ detail?.template_cpu || "—" }}</dd>
+              </div>
+              <div class="meta-row">
+                <dt class="meta-label">实例配置</dt>
+                <template v-if="!cpuEditing">
+                  <dd class="meta-value meta-mono min-w-0 flex-1 text-right">
+                    {{ cpuConfiguredLabel }}
+                  </dd>
+                  <UTooltip :text="cpuBusy ? '保存中…' : '编辑 CPU 型号'">
+                    <UButton
+                      color="neutral"
+                      variant="ghost"
+                      size="xs"
+                      square
+                      :icon="cpuBusy ? 'i-lucide-loader-circle' : 'i-lucide-pencil'"
+                      :loading="cpuBusy"
+                      :disabled="cpuBusy"
+                      class="meta-action shrink-0"
+                      :ui="{ leadingIcon: 'size-3' }"
+                      @click.stop="startCpuEdit"
+                    />
+                  </UTooltip>
+                </template>
+                <div v-else ref="cpuEditWrap" class="min-w-0 flex-1">
+                  <UInput
+                    ref="cpuInputRef"
+                    v-model="cpuInput"
+                    autofocus
+                    size="sm"
+                    class="w-full"
+                    placeholder="留空使用模板默认，例如 max / cortex-a76"
+                    :disabled="cpuBusy"
+                    @keydown.enter.prevent="commitCpuEdit"
+                    @keydown.escape.prevent="cancelCpuEdit"
+                    @blur="onCpuBlur"
+                  />
+                </div>
+              </div>
+              <div class="meta-row">
+                <dt class="meta-label">实际生效</dt>
+                <dd class="meta-value meta-mono">{{ detail?.effective_cpu || detail?.template_cpu || "—" }}</dd>
+              </div>
+            </dl>
+            <p class="mt-3 text-xs text-dimmed">运行中修改不会热切换，将在下次启动时生效。</p>
+          </UCard>
+        </motion.div>
+
+        <motion.div :initial="{ opacity: 0, y: 10 }" :animate="{ opacity: 1, y: 0 }" :transition="staggerDelay(2)">
+          <UCard class="h-full ring-1 ring-default/40 transition-shadow hover:shadow-md">
+            <template #header>
+              <div class="flex items-center gap-2">
                 <UIcon name="i-lucide-hard-drive" class="size-4 text-secondary" />
                 <span class="font-semibold">启动磁盘 (rootfs.img)</span>
               </div>
@@ -326,6 +384,7 @@ import {
   fetchSnapshots,
   restoreSnapshot,
   updateCustomRootfs,
+  updateInstanceCpu,
 } from "@/api/endpoints";
 import type { InstanceDetail, Snapshot } from "@/api/types";
 import EmptyState from "@/components/EmptyState.vue";
@@ -350,9 +409,22 @@ const rootfsInputRef = ref<{ $el?: HTMLElement } | null>(null);
 const rootfsEditWrap = ref<HTMLElement | null>(null);
 let rootfsBlurTimer: ReturnType<typeof setTimeout> | null = null;
 
+const cpuInput = ref("");
+const cpuEditing = ref(false);
+const cpuBusy = ref(false);
+const cpuEditBaseline = ref("");
+const cpuInputRef = ref<{ $el?: HTMLElement } | null>(null);
+const cpuEditWrap = ref<HTMLElement | null>(null);
+let cpuBlurTimer: ReturnType<typeof setTimeout> | null = null;
+
 const displayRootfsPath = computed(
   () => detail.value?.custom_rootfs_source_path || customRootfsInput.value.trim() || ""
 );
+
+const cpuConfiguredLabel = computed(() => {
+  if (cpuEditing.value) return "";
+  return detail.value?.cpu || "跟随模板默认";
+});
 
 /** 磁盘容量：展示 + 铅笔编辑（失焦有变化则确认弹窗） */
 const driveEditing = ref(false);
@@ -450,6 +522,9 @@ async function loadDetail(silent = false) {
     detail.value = data;
     if (!customRootfsBusy.value && !rootfsEditing.value) {
       customRootfsInput.value = data.custom_rootfs_source_path || "";
+    }
+    if (!cpuBusy.value && !cpuEditing.value) {
+      cpuInput.value = data.cpu || "";
     }
     // 本组件常驻挂载，是实例状态的唯一轮询源，逐次上报给 InstanceManage
     emit("status-changed", data.status);
@@ -558,6 +633,75 @@ async function commitRootfsEdit() {
     focusRootfsInput();
   } finally {
     customRootfsBusy.value = false;
+  }
+}
+
+function focusCpuInput() {
+  void nextTick(() => {
+    const root = cpuInputRef.value?.$el as HTMLElement | undefined;
+    const input =
+      root?.querySelector?.("input") ||
+      (root instanceof HTMLInputElement ? root : null) ||
+      cpuEditWrap.value?.querySelector("input");
+    input?.focus();
+    input?.select?.();
+  });
+}
+
+function startCpuEdit() {
+  if (cpuBusy.value) return;
+  cpuEditBaseline.value = detail.value?.cpu || "";
+  cpuInput.value = cpuEditBaseline.value;
+  cpuEditing.value = true;
+  focusCpuInput();
+}
+
+function cancelCpuEdit() {
+  if (cpuBlurTimer) {
+    clearTimeout(cpuBlurTimer);
+    cpuBlurTimer = null;
+  }
+  cpuInput.value = cpuEditBaseline.value;
+  cpuEditing.value = false;
+}
+
+function onCpuBlur() {
+  if (cpuBlurTimer) clearTimeout(cpuBlurTimer);
+  cpuBlurTimer = setTimeout(() => {
+    cpuBlurTimer = null;
+    void commitCpuEdit();
+  }, 120);
+}
+
+async function commitCpuEdit() {
+  if (cpuBlurTimer) {
+    clearTimeout(cpuBlurTimer);
+    cpuBlurTimer = null;
+  }
+  if (!cpuEditing.value || cpuBusy.value) return;
+
+  const value = cpuInput.value.trim();
+  const baseline = cpuEditBaseline.value.trim();
+  if (value === baseline) {
+    cpuEditing.value = false;
+    cpuInput.value = baseline;
+    return;
+  }
+
+  cpuBusy.value = true;
+  try {
+    detail.value = await updateInstanceCpu(props.instanceId, value || null);
+    const saved = detail.value.cpu || "";
+    cpuInput.value = saved;
+    cpuEditBaseline.value = saved;
+    cpuEditing.value = false;
+    toastSuccess(value ? `QEMU CPU 已更新为 ${value}` : "已恢复模板默认 CPU");
+    emit("updated");
+  } catch (e: unknown) {
+    toastError(e instanceof Error ? e.message : "更新 CPU 失败");
+    focusCpuInput();
+  } finally {
+    cpuBusy.value = false;
   }
 }
 
@@ -773,6 +917,10 @@ onBeforeUnmount(() => {
   if (driveBlurTimer) {
     clearTimeout(driveBlurTimer);
     driveBlurTimer = null;
+  }
+  if (cpuBlurTimer) {
+    clearTimeout(cpuBlurTimer);
+    cpuBlurTimer = null;
   }
 });
 </script>

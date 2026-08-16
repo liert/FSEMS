@@ -157,11 +157,15 @@ def net_device_arg(machine: str) -> str:
     return "virtio-net-pci,netdev=net0"
 
 
-def effective_cpu(template: Template) -> str:
-    """Malta 使用带 FPU 的 24Kf，兼容 EdgeOS 的 MIPS hard-float 用户态。"""
-    if template.machine == "malta" and template.cpu == "24Kc":
+def effective_cpu(template: Template, cpu_override: str | None = None) -> str:
+    """实例级 CPU 覆盖优先，其次模板默认值。
+
+    Malta 使用带 FPU 的 24Kf，兼容 EdgeOS 的 MIPS hard-float 用户态。
+    """
+    cpu = (cpu_override or "").strip() or template.cpu
+    if template.machine == "malta" and cpu == "24Kc":
         return "24Kf"
-    return template.cpu
+    return cpu
 
 
 def effective_kernel_append(template: Template, filesystem_type: str | None = None) -> str:
@@ -194,7 +198,7 @@ def build_cmd(instance: Instance, template: Template) -> list[str]:
         "-M",
         template.machine,
         "-cpu",
-        effective_cpu(template),
+        effective_cpu(template, getattr(instance, "cpu", None)),
         "-m",
         f"{template.ram_size}M",
         "-display",
@@ -460,8 +464,8 @@ async def instance_diagnostics(instance: Instance, template: Template, serial_li
             "name": template.name,
             "arch": template.arch,
             "machine": template.machine,
-            "configured_cpu": template.cpu,
-            "effective_cpu": effective_cpu(template),
+            "configured_cpu": getattr(instance, "cpu", None) or template.cpu,
+            "effective_cpu": effective_cpu(template, getattr(instance, "cpu", None)),
             "configured_append": template.kernel_append,
             "effective_append": effective_kernel_append(
                 template, getattr(instance, "filesystem_type", None)

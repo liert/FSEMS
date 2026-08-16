@@ -13,6 +13,11 @@ class InstanceCreate(BaseModel):
     use_custom_rootfs: bool = False
 
 
+class InstanceCpuUpdate(BaseModel):
+    """创建后修改实例 QEMU CPU；空字符串或 null 表示恢复模板默认值。"""
+    cpu: str | None = Field(default=None, max_length=50)
+
+
 class InstanceAction(BaseModel):
     action: str = Field(pattern="^(start|stop|reset)$")
     allow_sigkill: bool | None = None
@@ -32,6 +37,7 @@ class InstanceOut(BaseModel):
     bridge_name: str | None = None
     filesystem_type: str = "ext4"
     use_custom_rootfs: bool = False
+    cpu: str | None = None
     pid: int | None = None
     created_at: datetime
 
@@ -39,6 +45,8 @@ class InstanceOut(BaseModel):
 class InstanceDetailOut(InstanceOut):
     template_name: str
     template_arch: str
+    template_cpu: str | None = None
+    effective_cpu: str | None = None
     ram_size_mb: int
     ram_used_mb: float | None = None
     drive_path: str | None = None

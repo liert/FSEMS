@@ -52,6 +52,7 @@ export interface Instance {
   bridge_name?: string | null;
   filesystem_type: FilesystemType;
   use_custom_rootfs: boolean;
+  cpu: string | null;
   pid: number | null;
   created_at: string;
 }
@@ -59,6 +60,8 @@ export interface Instance {
 export interface InstanceDetail extends Instance {
   template_name: string;
   template_arch: string;
+  template_cpu: string | null;
+  effective_cpu: string | null;
   ram_size_mb: number;
   ram_used_mb: number | null;
   drive_path: string | null;

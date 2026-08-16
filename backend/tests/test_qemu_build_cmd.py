@@ -5,6 +5,7 @@ import pytest
 from app.services.qemu_manager import (
     block_device_arg,
     build_cmd,
+    effective_cpu,
     effective_kernel_append,
     net_device_arg,
 )
@@ -78,3 +79,37 @@ def test_malta_build_cmd_uses_ide_pcnet_and_ttys0(monkeypatch, tmp_path):
     assert cmd[cmd.index("-append") + 1] == (
         "root=/dev/sda rootfstype=ext4 console=ttyS0,38400n8 rootwait"
     )
+
+
+def test_effective_cpu_uses_instance_override():
+    template = SimpleNamespace(machine="virt", cpu="cortex-a72")
+    assert effective_cpu(template) == "cortex-a72"
+    assert effective_cpu(template, "max") == "max"
+
+
+def test_build_cmd_uses_instance_cpu_override(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "app.services.qemu_manager.serial_socket_path",
+        lambda instance_id: str(tmp_path / f"{instance_id}.sock"),
+    )
+    instance = SimpleNamespace(
+        id="inst_test",
+        drive_path=str(tmp_path / "rootfs.img"),
+        serial_socket=None,
+        tap_name="tap_test",
+        cpu="max",
+        filesystem_type="ext4",
+    )
+    template = SimpleNamespace(
+        qemu_binary="qemu-system-aarch64",
+        machine="virt",
+        cpu="cortex-a72",
+        ram_size=512,
+        kernel_path=str(tmp_path / "kernel.bin"),
+        kernel_append="root=/dev/vda rootfstype=ext4 console=ttyAMA0",
+        drive_path=str(tmp_path / "template.img"),
+        extra_args="",
+    )
+
+    cmd = build_cmd(instance, template)
+    assert cmd[cmd.index("-cpu") + 1] == "max"

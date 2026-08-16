@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.schemas.instance import InstanceCreate
+from app.schemas.instance import InstanceCpuUpdate, InstanceCreate
 
 
 def test_instance_create_defaults_to_ext4():
@@ -29,3 +29,13 @@ def test_instance_create_accepts_custom_rootfs_boot_flag():
     )
 
     assert payload.use_custom_rootfs is True
+
+
+def test_instance_cpu_update_accepts_null_to_restore_template_default():
+    payload = InstanceCpuUpdate(cpu=None)
+    assert payload.cpu is None
+
+
+def test_instance_cpu_update_accepts_qemu_cpu_name():
+    payload = InstanceCpuUpdate(cpu="max")
+    assert payload.cpu == "max"

@@ -62,6 +62,10 @@ async def init_db() -> None:
         except Exception:
             pass
         try:
+            await conn.execute(text("ALTER TABLE instances ADD COLUMN cpu VARCHAR(50)"))
+        except Exception:
+            pass
+        try:
             await conn.execute(text("ALTER TABLE tasks ADD COLUMN result_ref VARCHAR(50)"))
         except Exception:
             pass
