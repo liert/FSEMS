@@ -3,6 +3,7 @@ import collections
 import json
 import logging
 import os
+import re
 import shlex
 import shutil
 import signal
@@ -163,9 +164,15 @@ def effective_cpu(template: Template) -> str:
     return template.cpu
 
 
-def effective_kernel_append(template: Template) -> str:
+def effective_kernel_append(template: Template, filesystem_type: str | None = None) -> str:
     """修正常见的跨架构模板参数，同时保留用户的其他内核参数。"""
     append = template.kernel_append or ""
+    if filesystem_type:
+        fs_arg = f"rootfstype={filesystem_type.lower()}"
+        if re.search(r"(?:^|\s)rootfstype=\S+", append):
+            append = re.sub(r"(?<!\S)rootfstype=\S+", fs_arg, append, count=1)
+        else:
+            append = f"{append} {fs_arg}"
     if template.machine == "malta":
         append = append.replace("root=/dev/vda", "root=/dev/sda")
         append = append.replace("console=ttyAMA0", "console=ttyS0,38400n8")
@@ -195,7 +202,7 @@ def build_cmd(instance: Instance, template: Template) -> list[str]:
         "-kernel",
         template.kernel_path,
         "-append",
-        effective_kernel_append(template),
+        effective_kernel_append(template, getattr(instance, "filesystem_type", None)),
     ]
     block_device = block_device_arg(template.machine)
     if block_device is None:
@@ -456,7 +463,9 @@ async def instance_diagnostics(instance: Instance, template: Template, serial_li
             "configured_cpu": template.cpu,
             "effective_cpu": effective_cpu(template),
             "configured_append": template.kernel_append,
-            "effective_append": effective_kernel_append(template),
+            "effective_append": effective_kernel_append(
+                template, getattr(instance, "filesystem_type", None)
+            ),
             "block_device": block_device_arg(template.machine) or "ide",
             "network_device": net_device_arg(template.machine),
         },

@@ -37,6 +37,16 @@ def test_malta_kernel_append_is_corrected():
     )
 
 
+def test_filesystem_type_overrides_template_kernel_append():
+    template = SimpleNamespace(
+        machine="virt",
+        kernel_append="root=/dev/vda rootfstype=ext4 console=ttyAMA0",
+    )
+    assert effective_kernel_append(template, "squashfs") == (
+        "root=/dev/vda rootfstype=squashfs console=ttyAMA0"
+    )
+
+
 def test_malta_build_cmd_uses_ide_pcnet_and_ttys0(monkeypatch, tmp_path):
     monkeypatch.setattr(
         "app.services.qemu_manager.serial_socket_path",

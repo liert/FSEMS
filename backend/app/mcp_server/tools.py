@@ -115,6 +115,8 @@ async def create_instance(
     template_id: int,
     rootfs_path: str | None = None,
     network_type: str = "same",
+    filesystem_type: str = "ext4",
+    use_custom_rootfs: bool = False,
 ) -> dict[str, Any]:
     try:
         async with SessionLocal() as session:
@@ -124,12 +126,16 @@ async def create_instance(
                 template_id=int(template_id),
                 rootfs_path=rootfs_path,
                 network_type=network_type or "same",
+                filesystem_type=filesystem_type or "ext4",
+                use_custom_rootfs=use_custom_rootfs,
             )
             return {
                 "ok": True,
                 "id": inst.id,
                 "status": inst.status,
                 "guest_ssh_host": inst.guest_ssh_host,
+                "filesystem_type": inst.filesystem_type,
+                "use_custom_rootfs": bool(inst.use_custom_rootfs),
                 "message": "Instance created",
             }
     except Exception as exc:

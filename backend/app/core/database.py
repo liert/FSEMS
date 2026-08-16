@@ -50,6 +50,18 @@ async def init_db() -> None:
         except Exception:
             pass
         try:
+            await conn.execute(
+                text("ALTER TABLE instances ADD COLUMN filesystem_type VARCHAR(20) DEFAULT 'ext4'")
+            )
+        except Exception:
+            pass
+        try:
+            await conn.execute(
+                text("ALTER TABLE instances ADD COLUMN use_custom_rootfs BOOLEAN NOT NULL DEFAULT 0")
+            )
+        except Exception:
+            pass
+        try:
             await conn.execute(text("ALTER TABLE tasks ADD COLUMN result_ref VARCHAR(50)"))
         except Exception:
             pass

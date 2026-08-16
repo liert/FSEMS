@@ -95,6 +95,12 @@ const navItems = computed<NavigationMenuItem[]>(() => [
     active: route.path.startsWith("/templates"),
   },
   {
+    label: "固件工具",
+    icon: "i-lucide-wrench",
+    to: "/firmware-tools",
+    active: route.path.startsWith("/firmware-tools"),
+  },
+  {
     label: "系统日志",
     icon: "i-lucide-scroll-text",
     to: "/logs",

@@ -1,5 +1,5 @@
 import request, { unwrap } from "./request";
-import type { ApiResponse, InstanceDetail, InstanceList, Template, TemplateInput, TokenData, BackendLogs, FrontendLogs, HostDirListing, GuestDirListing, TransferTask, TaskStatus, DriveExpandResult, SnapshotList, SnapshotTaskResponse, HostUploadResult } from "./types";
+import type { ApiResponse, InstanceDetail, InstanceList, Template, TemplateInput, TokenData, BackendLogs, FrontendLogs, HostDirListing, GuestDirListing, TransferTask, TaskStatus, DriveExpandResult, SnapshotList, SnapshotTaskResponse, HostUploadResult, FilesystemType, SourceFilesystemType, FilesystemConvertResult } from "./types";
 
 export function login(username: string, password: string) {
   return unwrap(
@@ -166,7 +166,9 @@ export function createInstance(
   name: string,
   templateId: number,
   rootfsPath?: string,
-  networkType?: "same" | "different"
+  networkType?: "same" | "different",
+  filesystemType: FilesystemType = "ext4",
+  useCustomRootfs = false
 ) {
   return unwrap(
     request.post<ApiResponse<{ id: string; status: string }>>("/instances", {
@@ -174,6 +176,8 @@ export function createInstance(
       template_id: templateId,
       rootfs_path: rootfsPath || null,
       network_type: networkType || "same",
+      filesystem_type: filesystemType,
+      use_custom_rootfs: useCustomRootfs,
     })
   );
 }
@@ -356,5 +360,27 @@ export function guestFsOp(
 export function fetchTaskStatus(taskId: string) {
   return unwrap(
     request.get<ApiResponse<TaskStatus>>(`/tasks/${taskId}/status`)
+  );
+}
+
+export function convertFilesystem(requestBody: {
+  sourcePath: string;
+  sourceType: SourceFilesystemType;
+  targetType: FilesystemType;
+  outputName?: string;
+  sizeMb?: number;
+}) {
+  return unwrap(
+    request.post<ApiResponse<FilesystemConvertResult>>(
+      "/firmware-tools/filesystem/convert",
+      {
+        source_path: requestBody.sourcePath,
+        source_type: requestBody.sourceType,
+        target_type: requestBody.targetType,
+        output_name: requestBody.outputName || null,
+        size_mb: requestBody.sizeMb ?? null,
+      },
+      { timeout: 900000 }
+    )
   );
 }

@@ -25,6 +25,11 @@ const router = createRouter({
           meta: { title: "固件模板" },
         },
         {
+          path: "firmware-tools",
+          component: () => import("@/views/FirmwareTools.vue"),
+          meta: { title: "固件工具" },
+        },
+        {
           path: "logs",
           component: () => import("@/views/LogViewer.vue"),
           meta: { title: "系统日志" },

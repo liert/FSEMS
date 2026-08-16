@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -8,6 +9,8 @@ class InstanceCreate(BaseModel):
     template_id: int
     rootfs_path: str | None = None
     network_type: str | None = "same"  # "same" (同一局域网) 或 "different" (不同局域网)
+    filesystem_type: Literal["ext4", "squashfs", "f2fs"] = "ext4"
+    use_custom_rootfs: bool = False
 
 
 class InstanceAction(BaseModel):
@@ -27,6 +30,8 @@ class InstanceOut(BaseModel):
     guest_ssh_port: int = 22
     network_type: str | None = None
     bridge_name: str | None = None
+    filesystem_type: str = "ext4"
+    use_custom_rootfs: bool = False
     pid: int | None = None
     created_at: datetime
 

@@ -13,6 +13,7 @@ from app.core.config import get_settings
 from app.models.instance import Instance
 from app.models.template import Template
 from app.services import qemu_manager
+from app.services.firmware_tools import create_filesystem_image_from_tree
 from app.services.instance_info import (
     expand_drive_image,
     get_disk_image_stats,
@@ -24,6 +25,7 @@ from app.services.network_setup import bridge_exists
 logger = logging.getLogger(__name__)
 
 RUNNING_STATUSES = {"STARTING", "RUNNING", "STOPPING"}
+SUPPORTED_FILESYSTEM_TYPES = {"ext4", "squashfs", "f2fs"}
 
 
 def instance_to_out(instance: Instance) -> dict:
@@ -38,6 +40,8 @@ def instance_to_out(instance: Instance) -> dict:
         "guest_ssh_port": template.guest_ssh_port if template else 22,
         "network_type": instance.network_type,
         "bridge_name": instance.bridge_name,
+        "filesystem_type": instance.filesystem_type or "ext4",
+        "use_custom_rootfs": bool(instance.use_custom_rootfs),
         "pid": instance.pid,
         "created_at": instance.created_at,
     }
@@ -497,10 +501,22 @@ async def create_instance(
     template_id: int,
     rootfs_path: str | None = None,
     network_type: str | None = "same",
+    filesystem_type: str = "ext4",
+    use_custom_rootfs: bool = False,
 ) -> Instance:
     template = await session.get(Template, template_id)
     if not template:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found")
+
+    fs_type = filesystem_type.strip().lower()
+    if fs_type not in SUPPORTED_FILESYSTEM_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error_code": "INVALID_FILESYSTEM_TYPE",
+                "message": f"不支持的文件系统类型: {filesystem_type}",
+            },
+        )
 
     settings = get_settings()
     settings.ensure_dirs()
@@ -514,15 +530,33 @@ async def create_instance(
     
     # 1. 自动为该实例部署属于它自己的独立 QEMU 启动磁盘（总是由默认模板的 .img.gz 解压出来）
     try:
-        if not default_rootfs_gz.exists():
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error_code": "DEFAULT_ROOTFS_MISSING", "message": f"模板预设磁盘文件系统不存在: {default_rootfs_gz}"},
+        if use_custom_rootfs:
+            if not rootfs_path or not rootfs_path.strip():
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error_code": "CUSTOM_ROOTFS_REQUIRED",
+                        "message": "启用“作为启动 RootFS”时必须填写自定义 RootFS 路径",
+                    },
+                )
+            logger.info("将自定义 RootFS 部署为实例启动盘: %s -> %s", rootfs_path, instance_drive_path)
+            custom_rootfs_dir = deploy_custom_rootfs_dir(inst_workspace, rootfs_path.strip())
+            await asyncio.to_thread(
+                create_filesystem_image_from_tree,
+                custom_rootfs_dir,
+                instance_drive_path,
+                fs_type,
             )
-        
-        # 支持 gzip 压缩镜像和未压缩 raw 镜像，生成实例专属启动盘。
-        logger.info(f"为新实例部署专属 QEMU 启动磁盘: {default_rootfs_gz} -> {instance_drive_path}")
-        deploy_instance_drive(default_rootfs_gz, instance_drive_path)
+        else:
+            if not default_rootfs_gz.exists():
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail={"error_code": "DEFAULT_ROOTFS_MISSING", "message": f"模板预设磁盘文件系统不存在: {default_rootfs_gz}"},
+                )
+
+            # 支持 gzip 压缩镜像和未压缩 raw 镜像，生成实例专属启动盘。
+            logger.info(f"为新实例部署专属 QEMU 启动磁盘: {default_rootfs_gz} -> {instance_drive_path}")
+            deploy_instance_drive(default_rootfs_gz, instance_drive_path)
         
         # 2. 分配唯一的 IP 地址与网桥名
         # 查询所有已存在的实例，以计算新实例的网络属性
@@ -567,11 +601,18 @@ async def create_instance(
             guest_ssh_host = f"192.168.{new_idx}.1"
             gateway_ip = f"192.168.{new_idx}.254"
 
-        # 3. 自动将新生成的自定义网络 IP 写入虚拟机系统的启动盘 /etc/config/network 中
-        configure_instance_network(instance_drive_path, guest_ssh_host, gateway_ip)
+        # 3. ext4 可直接用 debugfs 写入网络配置；其他文件系统不使用 ext4 专用工具。
+        if fs_type == "ext4":
+            configure_instance_network(instance_drive_path, guest_ssh_host, gateway_ip)
+        else:
+            logger.warning(
+                "实例 %s 使用 %s，跳过 debugfs 网络配置写入；镜像需预置可用网络配置",
+                instance_id,
+                fs_type,
+            )
                 
-        # 4. 用户指定了自定义 rootfs 路径参数（解包到 workspace/{instance_id}/rootfs）
-        if rootfs_path and rootfs_path.strip():
+        # 未勾选启动开关时，自定义 RootFS 仍只作为离线浏览目录部署。
+        if not use_custom_rootfs and rootfs_path and rootfs_path.strip():
             deploy_custom_rootfs_dir(inst_workspace, rootfs_path.strip())
                 
     except Exception as e:
@@ -597,6 +638,8 @@ async def create_instance(
         guest_ssh_host=guest_ssh_host,
         network_type=net_type,
         bridge_name=bridge_name,
+        filesystem_type=fs_type,
+        use_custom_rootfs=use_custom_rootfs,
         custom_rootfs_path=rootfs_path.strip() if rootfs_path and rootfs_path.strip() else None,
     )
     session.add(instance)
@@ -795,6 +838,15 @@ async def expand_instance_drive(
     expand_mb: int,
     manage_lifecycle: bool = True,
 ) -> dict:
+    if (instance.filesystem_type or "ext4") != "ext4":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error_code": "UNSUPPORTED_FILESYSTEM_OPERATION",
+                "message": "当前仅支持扩容 ext4 启动盘",
+            },
+        )
+
     if instance.status == "STOPPING":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

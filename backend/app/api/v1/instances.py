@@ -51,7 +51,13 @@ async def create_instance(
     session: AsyncSession = Depends(get_db),
 ) -> ApiResponse[InstanceCreated]:
     instance = await instance_service.create_instance(
-        session, body.name, body.template_id, body.rootfs_path, body.network_type
+        session,
+        body.name,
+        body.template_id,
+        body.rootfs_path,
+        body.network_type,
+        body.filesystem_type,
+        body.use_custom_rootfs,
     )
     return ApiResponse(
         data=InstanceCreated(id=instance.id, status=instance.status),

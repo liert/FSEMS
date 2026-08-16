@@ -179,8 +179,32 @@
               />
             </UFormField>
             <UFormField label="自定义 RootFS">
-              <UInput v-model="newRootfsPath" placeholder="可选：宿主机上的压缩包或目录路径" class="w-full" />
-              <p class="mt-1 text-xs text-dimmed">留空则使用模板默认 rootfs 镜像</p>
+              <div class="flex items-start gap-3">
+                <UInput
+                  v-model="newRootfsPath"
+                  placeholder="可选：宿主机上的压缩包或目录路径"
+                  class="min-w-0 flex-1"
+                />
+                <UCheckbox
+                  v-model="useCustomRootfs"
+                  label="作为启动 RootFS"
+                  class="shrink-0 pt-1"
+                />
+              </div>
+              <p class="mt-1 text-xs text-dimmed">
+                未勾选时仅部署到离线 RootFS；勾选后将其制作成实例启动盘（路径不能为空）
+              </p>
+            </UFormField>
+            <UFormField label="文件系统类型" required>
+              <USelect
+                v-model="newFilesystemType"
+                :items="filesystemOptions"
+                value-key="value"
+                class="w-full"
+              />
+              <p class="mt-1 text-xs text-dimmed">
+                必须与启动盘实际格式一致；非 ext4 镜像需预置网络配置
+              </p>
             </UFormField>
             <UFormField label="网络模式">
               <URadioGroup
@@ -295,7 +319,7 @@ import {
   fetchTemplates,
   deleteInstance,
 } from "@/api/endpoints";
-import type { Instance, Template } from "@/api/types";
+import type { FilesystemType, Instance, Template } from "@/api/types";
 import StatusBadge from "@/components/StatusBadge.vue";
 import EmptyState from "@/components/EmptyState.vue";
 import ErrorState from "@/components/ErrorState.vue";
@@ -328,7 +352,9 @@ const newName = ref("");
 const newTemplateId = ref<number | undefined>(undefined);
 const creating = ref(false);
 const newRootfsPath = ref("");
+const useCustomRootfs = ref(false);
 const newNetworkType = ref<"same" | "different">("same");
+const newFilesystemType = ref<FilesystemType>("ext4");
 const searchQuery = ref("");
 let statusPollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -361,6 +387,12 @@ const filteredInstances = computed(() => {
 const templateOptions = computed(() =>
   templates.value.map((t) => ({ label: `${t.name} (${t.arch})`, value: t.id }))
 );
+
+const filesystemOptions: Array<{ label: string; value: FilesystemType }> = [
+  { label: "Ext4（可写，推荐）", value: "ext4" },
+  { label: "SquashFS（只读）", value: "squashfs" },
+  { label: "F2FS（可写）", value: "f2fs" },
+];
 
 function isDeleteDisabled(row: Instance) {
   return (
@@ -553,7 +585,9 @@ async function create() {
       newName.value,
       newTemplateId.value,
       newRootfsPath.value.trim(),
-      newNetworkType.value
+      newNetworkType.value,
+      newFilesystemType.value,
+      useCustomRootfs.value
     );
     showCreate.value = false;
     resetForm();
@@ -574,7 +608,9 @@ function cancelCreate() {
 function resetForm() {
   newName.value = "";
   newRootfsPath.value = "";
+  useCustomRootfs.value = false;
   newNetworkType.value = "same";
+  newFilesystemType.value = "ext4";
 }
 
 onMounted(async () => {

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -25,6 +25,8 @@ class Instance(Base):
     guest_ssh_host: Mapped[str | None] = mapped_column(String(45), nullable=True)
     network_type: Mapped[str | None] = mapped_column(String(20), default="same", server_default="same")
     bridge_name: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    filesystem_type: Mapped[str] = mapped_column(String(20), default="ext4", server_default="ext4")
+    use_custom_rootfs: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0", nullable=False)
     custom_rootfs_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     pid: Mapped[int | None] = mapped_column(Integer, nullable=True)
     serial_socket: Mapped[str | None] = mapped_column(String(255), nullable=True)

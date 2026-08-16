@@ -5,6 +5,19 @@ export interface ApiResponse<T> {
   message: string;
 }
 
+export type FilesystemType = "ext4" | "squashfs" | "f2fs";
+
+export type SourceFilesystemType = "auto" | FilesystemType;
+
+export interface FilesystemConvertResult {
+  source_path: string;
+  source_type: FilesystemType;
+  target_type: FilesystemType;
+  output_path: string;
+  output_size_bytes: number;
+  duration_ms: number;
+}
+
 export interface TokenData {
   access_token: string;
   token_type: string;
@@ -37,6 +50,8 @@ export interface Instance {
   guest_ssh_port: number;
   network_type?: string | null;
   bridge_name?: string | null;
+  filesystem_type: FilesystemType;
+  use_custom_rootfs: boolean;
   pid: number | null;
   created_at: string;
 }

@@ -91,7 +91,8 @@ def _register_tools(mcp: FastMCP) -> None:
         name="create_instance",
         description=(
             "创建实例。需要 name 与 template_id；可选 rootfs_path（自定义 RootFS 源路径）、"
-            "network_type=same|different"
+            "network_type=same|different、filesystem_type=ext4|squashfs|f2fs、"
+            "use_custom_rootfs=true 时将自定义 RootFS 作为启动盘"
         ),
     )
     async def create_instance(
@@ -99,6 +100,8 @@ def _register_tools(mcp: FastMCP) -> None:
         template_id: int,
         rootfs_path: str | None = None,
         network_type: str = "same",
+        filesystem_type: str = "ext4",
+        use_custom_rootfs: bool = False,
     ) -> str:
         return _json(
             await t.create_instance(
@@ -106,6 +109,8 @@ def _register_tools(mcp: FastMCP) -> None:
                 template_id=template_id,
                 rootfs_path=rootfs_path,
                 network_type=network_type,
+                filesystem_type=filesystem_type,
+                use_custom_rootfs=use_custom_rootfs,
             )
         )
 
