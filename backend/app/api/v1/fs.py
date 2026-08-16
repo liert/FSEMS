@@ -38,6 +38,7 @@ from app.schemas.fs import (
 from app.services.host_fs import (
     list_directory,
     resolve_instance_host_root,
+    resolve_workspace_entry,
     resolve_workspace_path,
     resolve_host_directory,
     host_mkdir,
@@ -396,11 +397,12 @@ async def transfer_file(
     path_obj = Path(host_path)
     try:
         if req.direction == "host_to_guest":
-            resolved = resolve_workspace_path(host_path)
-            if not resolved.is_file():
+            # 保留源路径最后一个分量的符号链接，让 iot-tools 同时复制链接和真实目标。
+            resolved = resolve_workspace_entry(host_path)
+            if not resolved.is_file() and not resolved.is_dir():
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail={"error_code": "FS_PATH_NOT_FOUND", "message": "Source host path is not a file"},
+                    detail={"error_code": "FS_PATH_NOT_FOUND", "message": "Source host path is not a file or directory"},
                 )
             req.src = str(resolved)
         elif req.direction == "guest_to_host":

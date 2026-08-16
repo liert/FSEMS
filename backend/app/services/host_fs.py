@@ -73,6 +73,57 @@ def resolve_workspace_path(relative: str) -> Path:
     return target
 
 
+def resolve_workspace_entry(path: str) -> Path:
+    """解析工作区内的一条源路径，但保留最后一个路径分量的符号链接。
+
+    resolve_workspace_path() 会把整条路径 resolve 成真实文件，导致文件管理器
+    传输软链接时 iot-tools 只能看到链接目标（普通文件），从而丢失链接本身。
+    本函数只 resolve 父目录，最后一个分量保持原样，让软链接条目进入传输计划。
+    """
+    settings = get_settings()
+    workspace = settings.workspace_path
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    path_str = (path or "").strip()
+    if not path_str:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error_code": "FS_PATH_NOT_FOUND", "message": "Path is required"},
+        )
+
+    candidate = Path(path_str) if path_str.startswith("/") else workspace / path_str
+    name = candidate.name
+    if name in ("", ".", ".."):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error_code": "FS_PATH_NOT_FOUND", "message": "Invalid path"},
+        )
+
+    # 父目录允许解析符号链接；最终条目不解析，保留链接本身。
+    target = candidate.parent.resolve() / name
+    workspace_resolved = workspace.resolve()
+    try:
+        target.relative_to(workspace_resolved)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error_code": "FS_PATH_NOT_FOUND", "message": "Path outside workspace"},
+        ) from exc
+
+    if target.is_symlink() and not target.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error_code": "FS_PATH_NOT_FOUND", "message": "Broken symlink"},
+        )
+    if not target.exists() and not target.is_symlink():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error_code": "FS_PATH_NOT_FOUND", "message": "Path not found"},
+        )
+
+    return target
+
+
 def _bad_request(message: str, code: str = "FS_INVALID_OP") -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,

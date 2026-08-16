@@ -69,7 +69,9 @@ def _dependency_search_root(instance_id: str, source_path: str) -> Path:
     search_root；若仍用文件所在目录，依赖只会扫描 usr/bin 等单层目录，最终
     出现“只传了 dbus-daemon、没有传 libdbus/libexpat 等依赖”的问题。
     """
-    source = Path(source_path).resolve()
+    # 注意：这里不能 resolve()。传输软链接时 source_path 是链接条目本身，
+    # resolve 后会退化成真实目标文件，导致搜索根选错（绝对链接尤其明显）。
+    source = Path(source_path).absolute()
     instance_root = resolve_instance_host_root(instance_id)
     try:
         source.relative_to(instance_root)

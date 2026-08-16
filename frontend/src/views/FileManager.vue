@@ -531,15 +531,14 @@ function buildMenu(side: Side): ContextMenuItem[][] {
         kbds: ["enter"],
         onSelect: () => openEntry(side, row),
       });
-    } else {
-      primary.push({
-        label: `传到${otherLabel}`,
-        description: guestCanWrite.value ? otherDir : "需要虚拟机处于运行状态",
-        icon: side === "host" ? "i-lucide-arrow-right" : "i-lucide-arrow-left",
-        disabled: !guestCanWrite.value,
-        onSelect: () => void transfer(side, row),
-      });
     }
+    primary.push({
+      label: `传到${otherLabel}`,
+      description: guestCanWrite.value ? otherDir : "需要虚拟机处于运行状态",
+      icon: side === "host" ? "i-lucide-arrow-right" : "i-lucide-arrow-left",
+      disabled: !guestCanWrite.value,
+      onSelect: () => void transfer(side, row),
+    });
     groups.push(primary);
 
     const edit: ContextMenuItem[] = [
@@ -975,7 +974,7 @@ async function handleHostUploadPick(event: Event) {
 
 /** 从 side 一侧把 row 传到对侧的当前目录 */
 async function transfer(side: Side, row: FileEntry) {
-  if (!guestCanWrite.value || row.is_dir) return;
+  if (!guestCanWrite.value) return;
   const direction = side === "host" ? "host_to_guest" : "guest_to_host";
   const destDir = side === "host" ? guestCurrentPath.value : hostCurrentPath.value;
   const label = side === "host" ? "传到虚拟机" : "传到宿主机";

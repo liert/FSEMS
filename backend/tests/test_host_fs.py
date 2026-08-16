@@ -43,3 +43,28 @@ def test_reject_missing_path(workspace):
     with pytest.raises(HTTPException) as exc:
         host_fs.resolve_workspace_path("missing.txt")
     assert exc.value.status_code == 404
+
+
+def test_resolve_workspace_entry_preserves_symlink(workspace):
+    real = workspace / "lib" / "libdemo.so.1"
+    real.parent.mkdir()
+    real.write_text("demo")
+    link = workspace / "usr" / "lib" / "libdemo.so"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(real)
+
+    resolved = host_fs.resolve_workspace_entry(str(link))
+
+    assert resolved == link
+    assert resolved.is_symlink()
+    assert resolved.read_text() == "demo"
+
+
+def test_resolve_workspace_entry_rejects_broken_symlink(workspace):
+    link = workspace / "broken.so"
+    link.symlink_to("missing.so")
+
+    with pytest.raises(HTTPException) as exc:
+        host_fs.resolve_workspace_entry(str(link))
+    assert exc.value.status_code == 404
+    assert exc.value.detail["error_code"] == "FS_PATH_NOT_FOUND"
